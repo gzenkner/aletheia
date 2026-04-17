@@ -2,6 +2,7 @@ import React from "react";
 import type { InvestingActivity } from "../types";
 import Card from "../ui/Card";
 import { cn } from "../ui/cn";
+import { convertAmount, type ReportingCurrency } from "../fx";
 
 function money(amount: number, ccy: string): string {
   const sign = amount < 0 ? "-" : "";
@@ -31,6 +32,11 @@ function isMarketBuy(action: string): boolean {
 
 function isMarketSell(action: string): boolean {
   return action.trim().toLowerCase() === "market sell";
+}
+
+function asReportingCurrency(currency: string): ReportingCurrency | undefined {
+  if (currency === "GBP" || currency === "USD" || currency === "EUR") return currency;
+  return undefined;
 }
 
 type InstrumentMetric = {
@@ -108,7 +114,7 @@ export default function InvestingActivityView({
   activities: InvestingActivity[];
   selectedId: string | undefined;
   onSelect: (id: string) => void;
-  reportingCurrency: "GBP" | "USD";
+  reportingCurrency: ReportingCurrency;
 }) {
   const [sortNewestFirst, setSortNewestFirst] = React.useState(true);
   const [autoSelectToken, setAutoSelectToken] = React.useState(0);
@@ -147,10 +153,13 @@ export default function InvestingActivityView({
       const day = dateOnly(activity.time);
       if (instrumentDateFrom && day < instrumentDateFrom) continue;
       if (instrumentDateTo && day > instrumentDateTo) continue;
-      if (activity.totalCurrency !== reportingCurrency) continue;
-      const total = Number(activity.total || 0);
+      const totalRaw = Number(activity.total || 0);
       const shares = Number(activity.shares || 0);
-      if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(shares) || shares <= 0) continue;
+      const sourceCurrency = asReportingCurrency(activity.totalCurrency || "");
+      if (!sourceCurrency) continue;
+      if (!Number.isFinite(totalRaw) || totalRaw <= 0 || !Number.isFinite(shares) || shares <= 0) continue;
+      const total = convertAmount(totalRaw, sourceCurrency, reportingCurrency, day);
+      if (typeof total !== "number" || !Number.isFinite(total) || total <= 0) continue;
       const key = instrumentKey(activity);
       const current = map.get(key) ?? {
         label: instrumentLabel(activity),

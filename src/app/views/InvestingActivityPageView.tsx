@@ -1,9 +1,9 @@
 import React from "react";
 import type { ImportSummary, InvestingActivity } from "../types";
 import { actions, useAppState } from "../store";
+import { convertAmount, type ReportingCurrency } from "../fx";
 import InvestingActivityView from "./InvestingActivityView";
 import InvestingLoadView from "./InvestingLoadView";
-type ReportingCurrency = "GBP" | "USD" | "EUR";
 
 function isMarketBuy(action: string): boolean {
   return action.trim().toLowerCase() === "market buy";
@@ -11,6 +11,11 @@ function isMarketBuy(action: string): boolean {
 
 function isMarketSell(action: string): boolean {
   return action.trim().toLowerCase() === "market sell";
+}
+
+function asReportingCurrency(currency: string): ReportingCurrency | undefined {
+  if (currency === "GBP" || currency === "USD" || currency === "EUR") return currency;
+  return undefined;
 }
 
 type CashFlow = { date: string; amount: number };
@@ -114,14 +119,17 @@ function inferDateRange(activities: InvestingActivity[]): { minDay: string; maxD
 function buildPurchaseTimeline(activities: InvestingActivity[], currency: ReportingCurrency): PurchaseTimelinePoint[] {
   const spendByPeriod = new Map<string, number>();
   for (const activity of activities) {
-    if (activity.totalCurrency !== currency) continue;
     if (!isMarketBuy(activity.action)) continue;
     const day = (activity.time || "").slice(0, 10);
     if (!day) continue;
     const total = Number(activity.total || 0);
     if (!Number.isFinite(total) || total <= 0) continue;
+    const sourceCurrency = asReportingCurrency(activity.totalCurrency || "");
+    if (!sourceCurrency) continue;
+    const convertedTotal = convertAmount(total, sourceCurrency, currency, day);
+    if (typeof convertedTotal !== "number") continue;
     const period = day.slice(0, 7);
-    spendByPeriod.set(period, (spendByPeriod.get(period) ?? 0) + total);
+    spendByPeriod.set(period, (spendByPeriod.get(period) ?? 0) + convertedTotal);
   }
   return [...spendByPeriod.entries()]
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
@@ -152,14 +160,14 @@ const METRIC_TOOLTIPS = {
   mwrr: "Money-weighted return (XIRR) from buy/sell cash flows plus current portfolio value.",
   totalPnl: "Realized P/L plus unrealized P/L. Requires current value to compute unrealized.",
   realizedPnl: "Profit/loss from closed shares using average-cost matching.",
-  amountInvested: "Total GBP value of all buy transactions.",
-  netDeposits: "Total buys minus total sells in GBP. Positive means net cash invested.",
-  totalFxFees: "Sum of currency conversion fees (GBP activity rows only).",
+  amountInvested: "Total value of all buy transactions in selected currency.",
+  netDeposits: "Total buys minus total sells in selected currency. Positive means net cash invested.",
+  totalFxFees: "Sum of currency conversion fees in selected currency.",
   soldPct: "Sold shares divided by bought shares, shown as a percentage.",
   unique: "Number of unique instruments traded (ticker/ISIN based).",
   holdSold: "Average holding period in days for sold shares, weighted by sold quantity.",
   openPos: "Count of positions with remaining shares and positive cost basis.",
-  openBasis: "Current cost basis of all open positions in GBP."
+  openBasis: "Current cost basis of all open positions in selected currency."
 } as const;
 
 function MetricCard({
@@ -195,7 +203,7 @@ export default function InvestingActivityPageView({
   const [importOpen, setImportOpen] = React.useState(!activities.length);
   const [lastImportSummary, setLastImportSummary] = React.useState<ImportSummary | null>(null);
   const [reportingCurrency, setReportingCurrency] = React.useState<ReportingCurrency>("GBP");
-  const currentValue = reportingCurrency === "GBP" ? currentValueByAccount[account] : undefined;
+  const currentValueGbp = currentValueByAccount[account];
 
   const profiler = React.useMemo(() => {
     const ordered = [...activities].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
@@ -215,15 +223,22 @@ export default function InvestingActivityPageView({
     const flows: CashFlow[] = [];
 
     for (const a of ordered) {
-      if (a.totalCurrency !== reportingCurrency) continue;
       const day = (a.time || "").slice(0, 10);
       if (!day) continue;
-      const total = Number(a.total || 0);
+      const totalRaw = Number(a.total || 0);
       const shares = Number(a.shares || 0);
-      const fxFee = Number(a.currencyConversionFee || 0);
-      if (!Number.isFinite(total) || total <= 0) continue;
+      const sourceCurrency = asReportingCurrency(a.totalCurrency || "");
+      if (!sourceCurrency) continue;
+      if (!Number.isFinite(totalRaw) || totalRaw <= 0) continue;
+      const total = convertAmount(totalRaw, sourceCurrency, reportingCurrency, day);
+      if (typeof total !== "number" || !Number.isFinite(total) || total <= 0) continue;
       if (!Number.isFinite(shares) || shares <= 0) continue;
-      if (Number.isFinite(fxFee) && fxFee > 0) totalFxFees += fxFee;
+      const fxFeeRaw = Number(a.currencyConversionFee || 0);
+      const fxFeeCurrency = asReportingCurrency(a.currencyConversionFeeCurrency || a.totalCurrency || "");
+      if (Number.isFinite(fxFeeRaw) && fxFeeRaw > 0 && fxFeeCurrency) {
+        const convertedFxFee = convertAmount(fxFeeRaw, fxFeeCurrency, reportingCurrency, day);
+        if (typeof convertedFxFee === "number" && Number.isFinite(convertedFxFee) && convertedFxFee > 0) totalFxFees += convertedFxFee;
+      }
 
       const key = (a.ticker || a.isin || "UNKNOWN").trim();
       stockSet.add(key);
@@ -294,6 +309,12 @@ export default function InvestingActivityPageView({
     const asOfDay = inferAsOfDay(activities);
     const { minDay, maxDay } = inferDateRange(activities);
     const netDeposits = buys - sells;
+    const currentValue = (() => {
+      if (typeof currentValueGbp !== "number" || !Number.isFinite(currentValueGbp) || currentValueGbp <= 0) return undefined;
+      const valuationDay = asOfDay || maxDay || "";
+      if (!valuationDay) return undefined;
+      return convertAmount(currentValueGbp, "GBP", reportingCurrency, valuationDay);
+    })();
     const fxFeePctOfBuys = buys > 0 ? (totalFxFees / buys) * 100 : undefined;
     const fxFeePctOfSells = sells > 0 ? (totalFxFees / sells) * 100 : undefined;
     const unrealisedPnl = typeof currentValue === "number" ? currentValue - openCostBasis : undefined;
@@ -329,7 +350,7 @@ export default function InvestingActivityPageView({
       totalPnl,
       mwrr
     };
-  }, [activities, currentValue, reportingCurrency]);
+  }, [activities, currentValueGbp, reportingCurrency]);
 
   React.useEffect(() => {
     if (!activities.length) setImportOpen(true);
@@ -337,6 +358,12 @@ export default function InvestingActivityPageView({
 
   const soldPct = clampPct(profiler.soldPct);
   const openPositionPct = profiler.uniqueStocks > 0 ? clampPct((profiler.openPositions / profiler.uniqueStocks) * 100) : 0;
+  const valuationDay = profiler.asOfDay || profiler.maxDay || new Date().toISOString().slice(0, 10);
+  const currentValueDisplay = React.useMemo(() => {
+    if (typeof currentValueGbp !== "number" || !Number.isFinite(currentValueGbp) || currentValueGbp <= 0) return "";
+    const converted = convertAmount(currentValueGbp, "GBP", reportingCurrency, valuationDay);
+    return typeof converted === "number" && Number.isFinite(converted) ? converted.toFixed(2) : "";
+  }, [currentValueGbp, reportingCurrency, valuationDay]);
   const purchaseTimeline = React.useMemo(() => buildPurchaseTimeline(activities, reportingCurrency), [activities, reportingCurrency]);
   const purchasePeak = React.useMemo(
     () => purchaseTimeline.reduce((max, point) => (point.amount > max ? point.amount : max), 0),
@@ -383,36 +410,65 @@ export default function InvestingActivityPageView({
       <section className="rounded-[0.7rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
         <div className="grid content-start gap-1.5">
           <div className="grid gap-1">
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-[0.6rem] border border-[color:var(--app-border)] bg-[color:var(--app-elevated)] px-2 py-1.5">
-              <div className="flex items-center gap-2">
-                <div className="text-[11px] font-semibold tracking-[0.06em]">Portfolio</div>
-                <select
-                  className="app-input h-7 rounded-[0.5rem] px-2.5 text-[11px] font-semibold focus:outline-none"
-                  value={account}
-                  onChange={(e) => actions.setTrading212Account(e.target.value as any)}
-                >
-                  <option value="isa">Trading 212 ISA</option>
-                  <option value="general">Trading 212</option>
-                </select>
-                <select
-                  className="app-input h-7 rounded-[0.5rem] border-2 border-[color:var(--app-border)] px-2.5 text-[11px] font-semibold focus:outline-none"
-                  value={reportingCurrency}
-                  onChange={(e) => setReportingCurrency(e.target.value as ReportingCurrency)}
-                  title="Reporting currency"
-                >
-                  <option value="GBP">GBP</option>
-                  <option value="USD">USD</option>
-                  <option value="EUR">EUR</option>
-                </select>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-[0.7rem] border border-[#d1d5db] bg-[#f3f4f6] px-2.5 py-2 text-[#374151]">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="text-[11px] font-semibold tracking-[0.08em] text-[#111827]">Portfolio</div>
+                <div className="flex items-center gap-1 rounded-[0.55rem] border border-[#d1d5db] bg-[#ffffff] px-1 py-1">
+                  <span className="px-1 text-[10px] font-semibold text-[#6b7280]">Account</span>
+                  <select
+                    className="app-input h-6 rounded-[0.45rem] border border-[#d1d5db] bg-[#ffffff] px-2 text-[10px] font-semibold text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
+                    value={account}
+                    onChange={(e) => actions.setTrading212Account(e.target.value as any)}
+                  >
+                    <option value="isa">ISA</option>
+                    <option value="general">General</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-1 rounded-[0.55rem] border border-[#d1d5db] bg-[#ffffff] px-1 py-1">
+                  <span className="px-1 text-[10px] font-semibold text-[#6b7280]">Currency</span>
+                  <select
+                    className="app-input h-6 rounded-[0.45rem] border border-[#d1d5db] bg-[#ffffff] px-2 text-[10px] font-semibold text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
+                    value={reportingCurrency}
+                    onChange={(e) => setReportingCurrency(e.target.value as ReportingCurrency)}
+                    title="Reporting currency"
+                  >
+                    <option value="GBP">GBP</option>
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-1 rounded-[0.55rem] border border-[#d1d5db] bg-[#ffffff] px-1 py-1">
+                  <span className="px-1 text-[10px] font-semibold text-[#6b7280]">Value</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="app-input h-6 w-24 rounded-[0.45rem] border border-[#d1d5db] bg-[#ffffff] px-2 text-[10px] font-semibold text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
+                    value={currentValueDisplay}
+                    placeholder="0.00"
+                    onChange={(e) => {
+                      const raw = Number(e.target.value);
+                      if (!Number.isFinite(raw) || raw <= 0) {
+                        actions.setTrading212CurrentValueGbp(account, undefined);
+                        return;
+                      }
+                      const gbpValue = convertAmount(raw, reportingCurrency, "GBP", valuationDay);
+                      if (typeof gbpValue === "number" && Number.isFinite(gbpValue) && gbpValue > 0) {
+                        actions.setTrading212CurrentValueGbp(account, gbpValue);
+                      }
+                    }}
+                    title={`Current portfolio value in ${reportingCurrency}`}
+                  />
+                </div>
               </div>
               <div className="flex items-center gap-1.5">
-                <div className="rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-card)] px-2 py-0.5 text-[10px] font-semibold">
+                <div className="rounded-full border border-[#d1d5db] bg-[#ffffff] px-2 py-0.5 text-[10px] font-semibold text-[#374151]">
                   {account === "isa" ? "ISA" : "GENERAL"}
                 </div>
                 {!importOpen ? (
                   <button
                     type="button"
-                    className="app-ghost-outline rounded-[0.55rem] px-2 py-1 text-[10px] font-semibold transition hover:bg-[color:var(--app-nav-hover)]"
+                    className="rounded-[0.55rem] border border-[#d1d5db] bg-[#ffffff] px-2 py-1 text-[10px] font-semibold text-[#374151] transition hover:border-[#2563eb] hover:bg-[#eff6ff]"
                     onClick={() => setImportOpen(true)}
                   >
                     Import CSV...
