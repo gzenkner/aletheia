@@ -3,6 +3,7 @@ import type { ImportSummary, InvestingActivity } from "../types";
 import { actions, useAppState } from "../store";
 import InvestingActivityView from "./InvestingActivityView";
 import InvestingLoadView from "./InvestingLoadView";
+type ReportingCurrency = "GBP" | "USD" | "EUR";
 
 function isMarketBuy(action: string): boolean {
   return action.trim().toLowerCase() === "market buy";
@@ -66,10 +67,11 @@ function computeXirr(flows: CashFlow[]): number | undefined {
   return (lo + hi) / 2;
 }
 
-function fmtGbp(n: number): string {
+function fmtMoney(n: number, currency: ReportingCurrency): string {
+  const symbol = currency === "USD" ? "$" : currency === "EUR" ? "€" : "£";
   const sign = n < 0 ? "-" : "";
   const abs = Math.abs(n);
-  return `${sign}£${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${sign}${symbol}${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function fmtPct(n: number): string {
@@ -109,10 +111,10 @@ function inferDateRange(activities: InvestingActivity[]): { minDay: string; maxD
   return { minDay, maxDay };
 }
 
-function buildPurchaseTimeline(activities: InvestingActivity[]): PurchaseTimelinePoint[] {
+function buildPurchaseTimeline(activities: InvestingActivity[], currency: ReportingCurrency): PurchaseTimelinePoint[] {
   const spendByPeriod = new Map<string, number>();
   for (const activity of activities) {
-    if (activity.totalCurrency !== "GBP") continue;
+    if (activity.totalCurrency !== currency) continue;
     if (!isMarketBuy(activity.action)) continue;
     const day = (activity.time || "").slice(0, 10);
     if (!day) continue;
@@ -133,6 +135,16 @@ function formatMonth(period: string): string {
   if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return period;
   const date = new Date(Date.UTC(year, month - 1, 1));
   return date.toLocaleDateString(undefined, { month: "short", year: "2-digit", timeZone: "UTC" });
+}
+
+function formatIsoDateHuman(isoDay: string): string {
+  const [yearRaw, monthRaw, dayRaw] = isoDay.split("-");
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return isoDay || "-";
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
 
@@ -182,7 +194,8 @@ export default function InvestingActivityPageView({
   const currentValueByAccount = useAppState((s) => s.investing.ui.trading212CurrentValueGbpByAccount);
   const [importOpen, setImportOpen] = React.useState(!activities.length);
   const [lastImportSummary, setLastImportSummary] = React.useState<ImportSummary | null>(null);
-  const currentValue = currentValueByAccount[account];
+  const [reportingCurrency, setReportingCurrency] = React.useState<ReportingCurrency>("GBP");
+  const currentValue = reportingCurrency === "GBP" ? currentValueByAccount[account] : undefined;
 
   const profiler = React.useMemo(() => {
     const ordered = [...activities].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
@@ -202,7 +215,7 @@ export default function InvestingActivityPageView({
     const flows: CashFlow[] = [];
 
     for (const a of ordered) {
-      if (a.totalCurrency !== "GBP") continue;
+      if (a.totalCurrency !== reportingCurrency) continue;
       const day = (a.time || "").slice(0, 10);
       if (!day) continue;
       const total = Number(a.total || 0);
@@ -316,7 +329,7 @@ export default function InvestingActivityPageView({
       totalPnl,
       mwrr
     };
-  }, [activities, currentValue]);
+  }, [activities, currentValue, reportingCurrency]);
 
   React.useEffect(() => {
     if (!activities.length) setImportOpen(true);
@@ -324,7 +337,7 @@ export default function InvestingActivityPageView({
 
   const soldPct = clampPct(profiler.soldPct);
   const openPositionPct = profiler.uniqueStocks > 0 ? clampPct((profiler.openPositions / profiler.uniqueStocks) * 100) : 0;
-  const purchaseTimeline = React.useMemo(() => buildPurchaseTimeline(activities), [activities]);
+  const purchaseTimeline = React.useMemo(() => buildPurchaseTimeline(activities, reportingCurrency), [activities, reportingCurrency]);
   const purchasePeak = React.useMemo(
     () => purchaseTimeline.reduce((max, point) => (point.amount > max ? point.amount : max), 0),
     [purchaseTimeline]
@@ -370,43 +383,42 @@ export default function InvestingActivityPageView({
       <section className="rounded-[0.7rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
         <div className="grid content-start gap-1.5">
           <div className="grid gap-1">
-            <div className="flex flex-wrap items-center justify-between gap-1.5">
-              <div className="flex items-center gap-1.5">
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Portfolio</div>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-[0.6rem] border border-[color:var(--app-border)] bg-[color:var(--app-elevated)] px-2 py-1.5">
+              <div className="flex items-center gap-2">
+                <div className="text-[11px] font-semibold tracking-[0.06em]">Portfolio</div>
                 <select
-                  className="app-input h-6 rounded-[0.45rem] px-2 text-[10px] focus:outline-none"
+                  className="app-input h-7 rounded-[0.5rem] px-2.5 text-[11px] font-semibold focus:outline-none"
                   value={account}
                   onChange={(e) => actions.setTrading212Account(e.target.value as any)}
                 >
                   <option value="isa">Trading 212 ISA</option>
                   <option value="general">Trading 212</option>
                 </select>
+                <select
+                  className="app-input h-7 rounded-[0.5rem] border-2 border-[color:var(--app-border)] px-2.5 text-[11px] font-semibold focus:outline-none"
+                  value={reportingCurrency}
+                  onChange={(e) => setReportingCurrency(e.target.value as ReportingCurrency)}
+                  title="Reporting currency"
+                >
+                  <option value="GBP">GBP</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                </select>
               </div>
-              <div className="flex items-center gap-1">
-                <div className="rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-elevated)] px-1.5 py-0.5 text-[9px] font-semibold">
+              <div className="flex items-center gap-1.5">
+                <div className="rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-card)] px-2 py-0.5 text-[10px] font-semibold">
                   {account === "isa" ? "ISA" : "GENERAL"}
                 </div>
                 {!importOpen ? (
                   <button
                     type="button"
-                    className="app-ghost-outline rounded-[0.5rem] px-2 py-0.5 text-[10px] font-semibold transition hover:bg-[color:var(--app-nav-hover)]"
+                    className="app-ghost-outline rounded-[0.55rem] px-2 py-1 text-[10px] font-semibold transition hover:bg-[color:var(--app-nav-hover)]"
                     onClick={() => setImportOpen(true)}
                   >
                     Import CSV...
                   </button>
                 ) : null}
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-1 text-[10px] app-muted">
-              <span className="uppercase tracking-[0.12em]">Portfolio Profiler</span>
-              <span>•</span>
-              <span>As of {profiler.asOfDay || "-"}</span>
-              <span>•</span>
-              <span>GBP only</span>
-              <span>•</span>
-              <span>
-                {profiler.minDay && profiler.maxDay ? `${profiler.minDay} to ${profiler.maxDay}` : "No dated activity"}
-              </span>
             </div>
           </div>
 
@@ -453,7 +465,7 @@ export default function InvestingActivityPageView({
                     </svg>
                     {hoveredTimelinePoint ? (
                       <div className="pointer-events-none absolute left-2 top-2 rounded-[0.4rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] px-1.5 py-0.5 text-[10px] leading-4 text-[color:var(--app-text)] shadow-sm">
-                        {formatMonth(hoveredTimelinePoint.period)}: {fmtGbp(hoveredTimelinePoint.amount)}
+                        {formatMonth(hoveredTimelinePoint.period)}: {fmtMoney(hoveredTimelinePoint.amount, reportingCurrency)}
                       </div>
                     ) : null}
                   </>
@@ -463,45 +475,48 @@ export default function InvestingActivityPageView({
               </div>
               <div className="mt-0.5 flex items-center justify-between text-[10px] app-muted">
                 <span>{purchaseTimeline.length ? formatMonth(purchaseTimeline[0]!.period) : "-"}</span>
-                <span>Peak {purchasePeak > 0 ? fmtGbp(purchasePeak) : "-"}</span>
+                <span>Peak {purchasePeak > 0 ? fmtMoney(purchasePeak, reportingCurrency) : "-"}</span>
                 <span>
                   {purchaseTimeline.length ? formatMonth(purchaseTimeline[purchaseTimeline.length - 1]!.period) : "-"}
                 </span>
               </div>
             </div>
 
-            <div className="grid gap-1 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+            <div className="grid gap-1 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-5 2xl:grid-cols-5">
+              <MetricCard tooltip={METRIC_TOOLTIPS.totalPnl} className={pnlToneClasses(profiler.unrealisedPnl)}>
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Unrealized Value</div>
+                <div className="text-sm font-semibold tabular-nums">
+                  {typeof profiler.unrealisedPnl === "number"
+                    ? fmtMoney(profiler.unrealisedPnl, reportingCurrency)
+                    : typeof profiler.mwrr === "number"
+                      ? fmtPct(profiler.mwrr * 100)
+                      : "-"}
+                </div>
+              </MetricCard>
+
+              <MetricCard tooltip={METRIC_TOOLTIPS.realizedPnl} className={pnlToneClasses(profiler.realizedPnl)}>
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Realized P/L</div>
+                <div className="text-sm font-semibold tabular-nums">{fmtMoney(profiler.realizedPnl, reportingCurrency)}</div>
+              </MetricCard>
+
               <MetricCard tooltip={METRIC_TOOLTIPS.mwrr}>
                 <div className="text-[10px] uppercase tracking-[0.12em] app-muted">MWRR</div>
                 <div className="text-sm font-semibold tabular-nums">{typeof profiler.mwrr === "number" ? fmtPct(profiler.mwrr * 100) : "Set value"}</div>
               </MetricCard>
 
-              <MetricCard tooltip={METRIC_TOOLTIPS.totalPnl} className={pnlToneClasses(profiler.totalPnl)}>
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Total P/L</div>
-                <div className="text-sm font-semibold tabular-nums">{typeof profiler.totalPnl === "number" ? fmtGbp(profiler.totalPnl) : "Set value"}</div>
-              </MetricCard>
-
-              <MetricCard tooltip={METRIC_TOOLTIPS.realizedPnl} className={pnlToneClasses(profiler.realizedPnl)}>
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Realized P/L</div>
-                <div className="text-sm font-semibold tabular-nums">{fmtGbp(profiler.realizedPnl)}</div>
+              <MetricCard tooltip={METRIC_TOOLTIPS.netDeposits}>
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Net Deposits</div>
+                <div className="text-sm font-semibold tabular-nums">{fmtMoney(profiler.netDeposits, reportingCurrency)}</div>
               </MetricCard>
 
               <MetricCard tooltip={METRIC_TOOLTIPS.amountInvested}>
                 <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Amount Invested</div>
-                <div className="text-sm font-semibold tabular-nums">{fmtGbp(profiler.buys)}</div>
+                <div className="text-sm font-semibold tabular-nums">{fmtMoney(profiler.buys, reportingCurrency)}</div>
               </MetricCard>
 
-              <MetricCard tooltip={METRIC_TOOLTIPS.netDeposits}>
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Net Deposits</div>
-                <div className="text-sm font-semibold tabular-nums">{fmtGbp(profiler.netDeposits)}</div>
-              </MetricCard>
-
-              <MetricCard tooltip={METRIC_TOOLTIPS.totalFxFees}>
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Total FX Fees</div>
-                <div className="text-sm font-semibold tabular-nums">{fmtGbp(profiler.totalFxFees)}</div>
-                <div className="mt-0.5 text-[10px] app-muted">
-                  Buys {typeof profiler.fxFeePctOfBuys === "number" ? fmtPct(profiler.fxFeePctOfBuys) : "-"} | Sells {typeof profiler.fxFeePctOfSells === "number" ? fmtPct(profiler.fxFeePctOfSells) : "-"}
-                </div>
+              <MetricCard tooltip={METRIC_TOOLTIPS.openBasis}>
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Open Basis</div>
+                <div className="text-sm font-semibold tabular-nums">{fmtMoney(profiler.openCostBasis, reportingCurrency)}</div>
               </MetricCard>
 
               <MetricCard tooltip={METRIC_TOOLTIPS.soldPct}>
@@ -510,11 +525,6 @@ export default function InvestingActivityPageView({
                 <div className="mt-1 h-1.5 rounded-full bg-[color:var(--app-border)]">
                   <div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${soldPct}%` }} />
                 </div>
-              </MetricCard>
-
-              <MetricCard tooltip={METRIC_TOOLTIPS.unique}>
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Unique</div>
-                <div className="text-sm font-semibold tabular-nums">{profiler.uniqueStocks}</div>
               </MetricCard>
 
               <MetricCard tooltip={METRIC_TOOLTIPS.holdSold}>
@@ -530,9 +540,12 @@ export default function InvestingActivityPageView({
                 </div>
               </MetricCard>
 
-              <MetricCard tooltip={METRIC_TOOLTIPS.openBasis}>
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Open Basis</div>
-                <div className="text-sm font-semibold tabular-nums">{fmtGbp(profiler.openCostBasis)}</div>
+              <MetricCard tooltip={METRIC_TOOLTIPS.totalFxFees}>
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Total FX Fees</div>
+                <div className="text-sm font-semibold tabular-nums">{fmtMoney(profiler.totalFxFees, reportingCurrency)}</div>
+                <div className="mt-0.5 text-[10px] app-muted">
+                  Buys {typeof profiler.fxFeePctOfBuys === "number" ? fmtPct(profiler.fxFeePctOfBuys) : "-"} | Sells {typeof profiler.fxFeePctOfSells === "number" ? fmtPct(profiler.fxFeePctOfSells) : "-"}
+                </div>
               </MetricCard>
             </div>
           </div>
@@ -553,7 +566,7 @@ export default function InvestingActivityPageView({
       <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-[0.7rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
         <div className="mb-1 text-[10px] uppercase tracking-[0.12em] app-muted">Deep Dive</div>
         <div className="min-h-0">
-          <InvestingActivityView activities={activities} selectedId={selectedId} onSelect={onSelect} />
+          <InvestingActivityView activities={activities} selectedId={selectedId} onSelect={onSelect} reportingCurrency={reportingCurrency} />
         </div>
       </section>
     </div>

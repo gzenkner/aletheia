@@ -60,7 +60,7 @@ function Tabs({ className }: { className?: string }) {
   );
 
   return (
-    <nav className={cn("flex flex-wrap gap-2", className)}>
+    <nav className={cn("flex w-full flex-wrap items-center gap-2", className)}>
       {visibleTabs.map((key) => {
         const active = key === activeTab;
         const label = key === "trades" ? `${TAB_META[key].label} (${tradesCount})` : TAB_META[key].label;
@@ -79,29 +79,31 @@ function Tabs({ className }: { className?: string }) {
           </button>
         );
       })}
-      <div className="mx-1 h-10 w-px self-center bg-[color:var(--app-border)]" />
-      <button
-        type="button"
-        title="Day trading profile"
-        className={cn(
-          "app-ghost-outline rounded-[0.65rem] px-3 py-2 text-base font-semibold transition",
-          profile === "day" ? "app-nav-active" : "hover:bg-[color:var(--app-nav-hover)]"
-        )}
-        onClick={() => actions.setActiveProfile("day")}
-      >
-        Day
-      </button>
-      <button
-        type="button"
-        title="Long-term investing profile"
-        className={cn(
-          "app-ghost-outline rounded-[0.65rem] px-3 py-2 text-base font-semibold transition",
-          profile === "investing" ? "app-nav-active" : "hover:bg-[color:var(--app-nav-hover)]"
-        )}
-        onClick={() => actions.setActiveProfile("investing")}
-      >
-        LT
-      </button>
+      <div className="ml-auto flex items-center gap-2">
+        <div className="mx-1 h-10 w-px self-center bg-[color:var(--app-border)]" />
+        <button
+          type="button"
+          title="Day trading profile"
+          className={cn(
+            "app-ghost-outline rounded-[0.65rem] px-3 py-2 text-base font-semibold transition",
+            profile === "day" ? "app-nav-active" : "hover:bg-[color:var(--app-nav-hover)]"
+          )}
+          onClick={() => actions.setActiveProfile("day")}
+        >
+          Day
+        </button>
+        <button
+          type="button"
+          title="Long-term investing profile"
+          className={cn(
+            "app-ghost-outline rounded-[0.65rem] px-3 py-2 text-base font-semibold transition",
+            profile === "investing" ? "app-nav-active" : "hover:bg-[color:var(--app-nav-hover)]"
+          )}
+          onClick={() => actions.setActiveProfile("investing")}
+        >
+          LT
+        </button>
+      </div>
     </nav>
   );
 }

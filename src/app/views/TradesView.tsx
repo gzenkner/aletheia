@@ -1,10 +1,9 @@
 import React from "react";
 import type { Trade, TradeReflection } from "../types";
-import Button from "../ui/Button";
 import Card from "../ui/Card";
 import Input from "../ui/Input";
 import Textarea from "../ui/Textarea";
-import { fmtDateTime, fmtDurationMs, fmtMoney, fmtPct, parseDatetimeLocal } from "../format";
+import { fmtDurationMs, fmtMoney, fmtPct, parseDatetimeLocal } from "../format";
 import { cn } from "../ui/cn";
 
 function pnlTone(pnl: number): string {
@@ -19,6 +18,16 @@ function pnlPillClass(pnl: number): string {
   return "border-[color:var(--app-border)] bg-[color:var(--app-elevated)] text-[color:var(--app-muted)]";
 }
 
+function dateOnly(datetime: string): string {
+  const day = (datetime || "").slice(0, 10);
+  return day || datetime || "—";
+}
+
+function datetimeValue(datetime: string): number {
+  const ts = new Date(datetime.replace(" ", "T") + "Z").getTime();
+  return Number.isFinite(ts) ? ts : 0;
+}
+
 function TradeRow({ trade, active, onSelect }: { trade: Trade; active: boolean; onSelect: () => void }) {
   const open = parseDatetimeLocal(trade.openDatetime);
   const close = parseDatetimeLocal(trade.closeDatetime);
@@ -28,27 +37,25 @@ function TradeRow({ trade, active, onSelect }: { trade: Trade; active: boolean; 
     <button
       type="button"
       className={cn(
-        "w-full rounded-[0.65rem] border px-3 py-3 text-left transition",
+        "w-full rounded-[0.6rem] border px-2.5 py-2 text-left transition",
         active ? "app-nav-active" : "border-[color:var(--app-border)] bg-[color:var(--app-card)] hover:bg-[color:var(--app-nav-hover)]"
       )}
       onClick={onSelect}
     >
-      <div className="flex items-center gap-3">
-        <span className="inline-flex h-3.5 w-3.5 shrink-0 rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-elevated)]" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-3">
-            <div className="truncate text-[13px] font-semibold">
-              {trade.symbol} <span className="text-[11px] app-muted">{String(trade.side).toUpperCase()}</span>
-            </div>
-            <span className={cn("shrink-0 rounded-[999px] border px-2 py-1 text-[11px] font-semibold", pnlPillClass(trade.grossPnl))}>
-              {fmtMoney(trade.grossPnl)}
-            </span>
-          </div>
-          <div className="mt-1 flex items-center justify-between gap-3 text-[11px] app-muted">
-            <div className="truncate">{trade.openDatetime.slice(11, 16)} → {trade.closeDatetime.slice(11, 16)}</div>
-            <div className="shrink-0">{hold > 0 ? fmtDurationMs(hold) : "—"}</div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-[12px] font-semibold">{trade.symbol}</div>
+          <div className="mt-0.5 truncate text-[10px] app-muted">
+            {String(trade.side).toUpperCase()} • {dateOnly(trade.openDatetime)}
           </div>
         </div>
+        <div className="shrink-0 text-right">
+          <div className={cn("text-[11px] font-semibold tabular-nums", pnlTone(trade.grossPnl))}>{fmtMoney(trade.grossPnl)}</div>
+          <div className="mt-0.5 text-[10px] app-muted tabular-nums">{trade.volume} sh</div>
+        </div>
+      </div>
+      <div className="mt-1 text-[10px] app-muted">
+        {dateOnly(trade.openDatetime)} → {dateOnly(trade.closeDatetime)} {hold > 0 ? `• ${fmtDurationMs(hold)}` : ""}
       </div>
     </button>
   );
@@ -65,6 +72,7 @@ function ReflectionPanel({
   onChange: (update: Partial<Omit<TradeReflection, "id" | "updatedAt">>) => void;
   onToggleMistake: (mistake: string) => void;
 }) {
+  void tradeId;
   const mistakes = reflection?.mistakes ?? [];
   const mistakeOptions = [
     "Chased entry",
@@ -187,11 +195,26 @@ export default function TradesView({
   onChangeReflection: (update: Partial<Omit<TradeReflection, "id" | "updatedAt">>) => void;
   onToggleMistake: (mistake: string) => void;
 }) {
-  const selected = React.useMemo(() => trades.find((t) => t.id === selectedTradeId) ?? trades[0], [trades, selectedTradeId]);
+  const [sortNewestFirst, setSortNewestFirst] = React.useState(true);
+  const sortedTrades = React.useMemo(
+    () =>
+      [...trades].sort((a, b) => {
+        const diff = datetimeValue(b.openDatetime) - datetimeValue(a.openDatetime);
+        return sortNewestFirst ? diff : -diff;
+      }),
+    [sortNewestFirst, trades]
+  );
+  const selected = React.useMemo(() => sortedTrades.find((t) => t.id === selectedTradeId) ?? sortedTrades[0], [selectedTradeId, sortedTrades]);
 
   React.useEffect(() => {
     if (!selectedTradeId && selected?.id) onSelectTrade(selected.id);
   }, [onSelectTrade, selected?.id, selectedTradeId]);
+
+  React.useEffect(() => {
+    const first = sortedTrades[0];
+    if (!first?.id) return;
+    if (selectedTradeId !== first.id) onSelectTrade(first.id);
+  }, [onSelectTrade, selectedTradeId, sortNewestFirst, sortedTrades]);
 
   if (!trades.length) {
     return (
@@ -208,15 +231,21 @@ export default function TradesView({
   const hold = open && close ? close.getTime() - open.getTime() : 0;
 
   return (
-    <div className="grid min-h-0 gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
+    <div className="grid h-full min-h-0 gap-2 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
       <div className="min-h-0">
-        <Card className="app-panel rounded-[0.95rem] p-3">
-          <div className="flex items-center justify-between gap-3 px-2 pb-2">
-            <div className="app-kicker">Trades</div>
-            <div className="text-xs app-muted">{trades.length}</div>
+        <Card className="app-panel flex h-full min-h-0 flex-col rounded-[0.7rem] p-1.5">
+          <div className="flex items-center justify-between gap-3 px-1.5 pb-2">
+            <div className="app-kicker">Activity</div>
+            <button
+              type="button"
+              className="app-ghost-outline rounded-[0.5rem] px-2 py-0.5 text-[10px] font-semibold"
+              onClick={() => setSortNewestFirst((prev) => !prev)}
+            >
+              Time: {sortNewestFirst ? "Newest" : "Oldest"}
+            </button>
           </div>
-          <div className="grid gap-2">
-            {trades.map((t) => (
+          <div className="grid min-h-0 flex-1 gap-1.5 overflow-y-auto pr-1">
+            {sortedTrades.map((t) => (
               <TradeRow key={t.id} trade={t} active={t.id === selected?.id} onSelect={() => onSelectTrade(t.id)} />
             ))}
           </div>
@@ -224,75 +253,66 @@ export default function TradesView({
       </div>
 
       {selected ? (
-        <div className="min-h-0 grid gap-4">
-          <Card className="app-card-soft sticky top-0 z-10 rounded-[0.95rem] p-5">
+        <div className="min-h-0 grid gap-2 overflow-y-auto pr-1">
+          <Card className="app-card-soft rounded-[0.7rem] p-2">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="app-kicker">Trade</div>
-                <div className="font-display mt-2 text-2xl font-semibold">
-                  {selected.symbol} <span className="text-base app-muted">{String(selected.side).toUpperCase()}</span>
-                </div>
-                <div className="mt-2 text-sm app-muted">
-                  {fmtDateTime(selected.openDatetime)} → {fmtDateTime(selected.closeDatetime)} {hold > 0 ? `• ${fmtDurationMs(hold)}` : ""}
+                <div className="app-kicker">Transaction</div>
+                <div className="font-display mt-0.5 text-[15px] font-semibold">{selected.symbol}</div>
+                <div className="mt-0.5 text-[11px] app-muted">
+                  {String(selected.side).toUpperCase()} • {dateOnly(selected.openDatetime)} → {dateOnly(selected.closeDatetime)}
+                  {hold > 0 ? ` • ${fmtDurationMs(hold)}` : ""}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className={cn("rounded-[999px] border px-3 py-1 text-sm font-semibold", pnlPillClass(selected.grossPnl))}>
-                  {fmtMoney(selected.grossPnl)} <span className="ml-1 text-xs opacity-75">({fmtPct(selected.grossPnlPct)})</span>
+                <span className={cn("app-pill rounded-[999px] px-2 py-0.5 text-[11px] font-semibold", pnlPillClass(selected.grossPnl))}>
+                  {fmtMoney(selected.grossPnl)} <span className="ml-1 text-[10px] opacity-75">({fmtPct(selected.grossPnlPct)})</span>
                 </span>
-                <span className="app-pill rounded-[999px] px-3 py-1 text-sm font-semibold">
-                  {selected.volume} sh
-                </span>
+                <span className="app-pill rounded-[999px] px-2 py-0.5 text-[11px] font-semibold">{selected.volume} sh</span>
               </div>
             </div>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-[0.75rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-3">
-                <div className="text-[11px] uppercase tracking-[0.14em] app-muted">Entry</div>
-                <div className="mt-1 text-sm font-semibold">{selected.entryPrice.toFixed(2)}</div>
+            <div className="mt-1.5 grid gap-1 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Entry</div>
+                <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.entryPrice.toFixed(2)}</div>
               </div>
-              <div className="rounded-[0.75rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-3">
-                <div className="text-[11px] uppercase tracking-[0.14em] app-muted">Exit</div>
-                <div className="mt-1 text-sm font-semibold">{selected.exitPrice.toFixed(2)}</div>
+              <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Exit</div>
+                <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.exitPrice.toFixed(2)}</div>
               </div>
-              <div className="rounded-[0.75rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-3">
-                <div className="text-[11px] uppercase tracking-[0.14em] app-muted">MFE / MAE</div>
-                <div className="mt-1 text-sm font-semibold">
-                  <span className="text-emerald-700">{fmtMoney(selected.positionMfe)}</span>{" "}
-                  <span className="app-muted">/</span>{" "}
+              <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">MFE / MAE</div>
+                <div className="mt-0.5 text-[11px] font-semibold">
+                  <span className="text-emerald-700">{fmtMoney(selected.positionMfe)}</span> <span className="app-muted">/</span>{" "}
                   <span className="text-rose-700">{fmtMoney(selected.positionMae)}</span>
                 </div>
               </div>
-              <div className="rounded-[0.75rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-3">
-                <div className="text-[11px] uppercase tracking-[0.14em] app-muted">Execs</div>
-                <div className="mt-1 text-sm font-semibold">{selected.execCount}</div>
+              <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Execs</div>
+                <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.execCount}</div>
               </div>
             </div>
 
             {selected.notes || selected.tags ? (
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="mt-1.5 grid gap-1 sm:grid-cols-2">
                 {selected.tags ? (
-                  <div className="rounded-[0.75rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-3">
-                    <div className="text-[11px] uppercase tracking-[0.14em] app-muted">Tags</div>
-                    <div className="mt-1 text-sm font-semibold">{selected.tags}</div>
+                  <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                    <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Tags</div>
+                    <div className="mt-0.5 text-[11px] font-semibold">{selected.tags}</div>
                   </div>
                 ) : null}
                 {selected.notes ? (
-                  <div className="rounded-[0.75rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-3">
-                    <div className="text-[11px] uppercase tracking-[0.14em] app-muted">Notes</div>
-                    <div className="mt-1 text-sm">{selected.notes}</div>
+                  <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                    <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Notes</div>
+                    <div className="mt-0.5 text-[11px]">{selected.notes}</div>
                   </div>
                 ) : null}
               </div>
             ) : null}
           </Card>
 
-          <ReflectionPanel
-            tradeId={selected.id}
-            reflection={reflection}
-            onChange={onChangeReflection}
-            onToggleMistake={onToggleMistake}
-          />
+          <ReflectionPanel tradeId={selected.id} reflection={reflection} onChange={onChangeReflection} onToggleMistake={onToggleMistake} />
         </div>
       ) : null}
     </div>
