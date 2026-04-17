@@ -2,12 +2,13 @@ import React from "react";
 import { actions, useAppState } from "../store";
 
 export default function StrategyView() {
-  const strategy = useAppState((s) => s.strategy);
+  const activeProfile = useAppState((s) => s.activeProfile);
+  const strategy = useAppState((s) => (activeProfile === "investing" ? s.investing.strategy : s.day.strategy));
 
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">Strategy</h2>
+        <h2 className="text-lg font-semibold">{activeProfile === "investing" ? "Policy" : "Strategy"}</h2>
         <div className="text-xs opacity-70">Saved: {strategy.updatedAt ? new Date(strategy.updatedAt).toLocaleString() : "—"}</div>
       </div>
 
@@ -44,4 +45,3 @@ export default function StrategyView() {
     </div>
   );
 }
-

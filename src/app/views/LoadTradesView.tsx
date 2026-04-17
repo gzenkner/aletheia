@@ -38,16 +38,27 @@ export default function LoadTradesView({ title = "Import trades", onSuccess, def
   const sample = sampleFileForSchema(schemaId);
   const selectedSchemaColumns = schema.requiredColumns.join(", ");
 
-  async function importText(text: string, source: string) {
+  async function importTexts(items: Array<{ text: string; source: string }>) {
     setBusy(true);
     setWarnings([]);
     setError(null);
     setSuccess(null);
     try {
-      const result = actions.importTradesFromCsvText(text, source, schemaId);
-      setWarnings(result.warnings);
-      setSuccess(result.summary);
-      onSuccess?.(result.summary);
+      let attempted = 0;
+      let loaded = 0;
+      let deduped = 0;
+      const allWarnings: string[] = [];
+      for (const it of items) {
+        const result = actions.importTradesFromCsvText(it.text, it.source, schemaId);
+        attempted += result.summary.attempted;
+        loaded += result.summary.loaded;
+        deduped += result.summary.deduped;
+        for (const w of result.warnings) allWarnings.push(`${it.source}: ${w}`);
+      }
+      const summary: ImportSummary = { attempted, loaded, deduped, source: items.length === 1 ? items[0]!.source : `${items.length} files`, schema: schemaId };
+      setWarnings(allWarnings);
+      setSuccess(summary);
+      onSuccess?.(summary);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -63,7 +74,7 @@ export default function LoadTradesView({ title = "Import trades", onSuccess, def
     try {
       const res = await fetch(`${import.meta.env.BASE_URL}${sample.path}`);
       const text = await res.text();
-      await importText(text, `sample: public/${sample.path}`);
+      await importTexts([{ text, source: `sample: public/${sample.path}` }]);
     } finally {
       setBusy(false);
     }
@@ -116,12 +127,13 @@ export default function LoadTradesView({ title = "Import trades", onSuccess, def
         <div className="flex flex-wrap items-center gap-2">
           <input
             type="file"
+            multiple
             accept=".csv,text/csv"
             disabled={busy}
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              file.text().then((text) => importText(text, file.name));
+              const files = e.target.files ? Array.from(e.target.files) : [];
+              if (!files.length) return;
+              Promise.all(files.map(async (f) => ({ source: f.name, text: await f.text() }))).then((items) => importTexts(items));
             }}
           />
           {sample ? (
@@ -158,7 +170,7 @@ export default function LoadTradesView({ title = "Import trades", onSuccess, def
           <button
             type="button"
             className="app-ghost-outline rounded-[0.65rem] px-3 py-2 text-sm font-semibold transition hover:bg-[color:var(--app-nav-hover)]"
-            onClick={() => importText(paste, "pasted")}
+            onClick={() => importTexts([{ text: paste, source: "pasted" }])}
             disabled={busy || !paste.trim()}
           >
             Import

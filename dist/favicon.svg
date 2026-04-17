@@ -1,9 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <style>
     :root { color: #111827; }
     @media (prefers-color-scheme: dark) { :root { color: #f8fafc; } }
   </style>
-  <circle cx="17" cy="17" r="10.5" fill="none" stroke="currentColor" stroke-width="4.4" />
-  <path d="M24.2 9.8 28 6" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" />
-  <circle cx="27.4" cy="6.5" r="2" fill="currentColor" />
+  <!-- Aletheia: a sharp "A" with an inner aperture + a small "truth" dot -->
+  <path
+    d="M32 7 L56 57 H46.8 L41.2 44.6 H22.8 L17.2 57 H8 Z"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="5.5"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M27.2 36.2 H36.8"
+    stroke="currentColor"
+    stroke-width="5.5"
+    stroke-linecap="round"
+  />
+  <circle cx="52" cy="14" r="4.2" fill="currentColor" />
 </svg>

@@ -12,7 +12,8 @@ function getAsOfDate(trades: Trade[]): string {
 }
 
 export default function JournalView({ trades }: { trades: Trade[] }) {
-  const journals = useAppState((s) => s.journals);
+  const activeProfile = useAppState((s) => s.activeProfile);
+  const journals = useAppState((s) => (activeProfile === "investing" ? s.investing.journals : s.day.journals));
   const asOfDate = React.useMemo(() => getAsOfDate(trades), [trades]);
   const [day, setDay] = React.useState(asOfDate);
 
@@ -73,4 +74,3 @@ export default function JournalView({ trades }: { trades: Trade[] }) {
     </div>
   );
 }
-
