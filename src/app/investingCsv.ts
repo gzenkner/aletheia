@@ -95,6 +95,14 @@ function strictNum(value: string, field: string, rowNumber: number): number {
   return parsed;
 }
 
+function optionalNum(value: string, field: string, rowNumber: number): number {
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "no result" || lowered === "-" || lowered === "—" || lowered === "n/a") return 0;
+  return strictNum(trimmed, field, rowNumber);
+}
+
 function str(value: string): string {
   return value ?? "";
 }
@@ -185,6 +193,8 @@ export function parseTrading212ActivityCsv(
       const priceCurrency = str(get(cells, "Currency (Price / share)")).trim();
       const fxRaw = get(cells, "Exchange rate");
       const exchangeRate = fxRaw.trim() ? strictNum(fxRaw, "Exchange rate", r + 1) : 0;
+      const result = optionalNum(get(cells, "Result"), "Result", r + 1);
+      const resultCurrency = str(get(cells, "Currency (Result)")).trim();
 
       // Further narrow to stock executions only.
       // Require an instrument identifier and a positive quantity.
@@ -201,6 +211,8 @@ export function parseTrading212ActivityCsv(
       const whtRaw = get(cells, "Withholding tax");
       const withholdingTax = whtRaw.trim() ? strictNum(whtRaw, "Withholding tax", r + 1) : 0;
       const withholdingTaxCurrency = str(get(cells, "Currency (Withholding tax)")).trim();
+      const stampDutyReserveTax = optionalNum(get(cells, "Stamp duty reserve tax"), "Stamp duty reserve tax", r + 1);
+      const stampDutyReserveTaxCurrency = str(get(cells, "Currency (Stamp duty reserve tax)")).trim();
 
       const fxFeeRaw = get(cells, "Currency conversion fee");
       const currencyConversionFee = fxFeeRaw.trim() ? strictNum(fxFeeRaw, "Currency conversion fee", r + 1) : 0;
@@ -227,14 +239,14 @@ export function parseTrading212ActivityCsv(
         pricePerShare,
         priceCurrency,
         exchangeRate,
-        result: 0,
-        resultCurrency: "",
+        result,
+        resultCurrency,
         total,
         totalCurrency,
         withholdingTax,
         withholdingTaxCurrency,
-        stampDutyReserveTax: 0,
-        stampDutyReserveTaxCurrency: "",
+        stampDutyReserveTax,
+        stampDutyReserveTaxCurrency,
         currencyConversionFee,
         currencyConversionFeeCurrency,
         frenchTransactionTax,

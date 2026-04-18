@@ -21,6 +21,7 @@ function asReportingCurrency(currency: string): ReportingCurrency | undefined {
 type CashFlow = { date: string; amount: number };
 type Lot = { qty: number; boughtAt: Date };
 type PurchaseTimelinePoint = { period: string; amount: number };
+type PriceHint = { time: string; day: string; unitPrice: number; currency: ReportingCurrency };
 
 function daysBetween(from: Date, to: Date): number {
   return (to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24);
@@ -157,8 +158,8 @@ function formatIsoDateHuman(isoDay: string): string {
 
 
 const METRIC_TOOLTIPS = {
-  mwrr: "Money-weighted return (XIRR) from buy/sell cash flows plus current portfolio value.",
-  totalPnl: "Realized P/L plus unrealized P/L. Requires current value to compute unrealized.",
+  mwrr: "Money-weighted return (XIRR) from buy/sell cash flows plus terminal value.",
+  totalPnl: "Unrealized metric uses saved value when available, otherwise a latest-trade-price estimate.",
   realizedPnl: "Profit/loss from closed shares using average-cost matching.",
   amountInvested: "Total value of all buy transactions in selected currency.",
   netDeposits: "Total buys minus total sells in selected currency. Positive means net cash invested.",
@@ -209,6 +210,7 @@ export default function InvestingActivityPageView({
     const ordered = [...activities].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
     const positions = new Map<string, { qty: number; cost: number }>();
     const lotsByStock = new Map<string, Lot[]>();
+    const priceHintsByStock = new Map<string, PriceHint>();
     const stockSet = new Set<string>();
     let buys = 0;
     let sells = 0;
@@ -242,6 +244,19 @@ export default function InvestingActivityPageView({
 
       const key = (a.ticker || a.isin || "UNKNOWN").trim();
       stockSet.add(key);
+      const existingPriceHint = priceHintsByStock.get(key);
+      if (!existingPriceHint || a.time > existingPriceHint.time) {
+        const rawPricePerShare = Number(a.pricePerShare || 0);
+        const priceCurrency = asReportingCurrency(a.priceCurrency || "");
+        if (Number.isFinite(rawPricePerShare) && rawPricePerShare > 0 && priceCurrency) {
+          priceHintsByStock.set(key, { time: a.time, day, unitPrice: rawPricePerShare, currency: priceCurrency });
+        } else {
+          const impliedPrice = totalRaw / shares;
+          if (Number.isFinite(impliedPrice) && impliedPrice > 0 && sourceCurrency) {
+            priceHintsByStock.set(key, { time: a.time, day, unitPrice: impliedPrice, currency: sourceCurrency });
+          }
+        }
+      }
       const pos = positions.get(key) ?? { qty: 0, cost: 0 };
       const lots = lotsByStock.get(key) ?? [];
       const tradeAt = new Date(a.time.replace(" ", "T") + "Z");
@@ -297,35 +312,58 @@ export default function InvestingActivityPageView({
       }
     }
 
+    const asOfDay = inferAsOfDay(activities);
+    const { minDay, maxDay } = inferDateRange(activities);
     let openCostBasis = 0;
     let openPositions = 0;
-    for (const p of positions.values()) {
+    let inferredCurrentValue = 0;
+    for (const [stockKey, p] of positions.entries()) {
       if (p.qty > 1e-12 && p.cost > 1e-12) {
         openPositions++;
         openCostBasis += p.cost;
+        const hint = priceHintsByStock.get(stockKey);
+        if (!hint) {
+          inferredCurrentValue += p.cost;
+          continue;
+        }
+        const unitAtAsOf = asOfDay ? convertAmount(hint.unitPrice, hint.currency, reportingCurrency, asOfDay) : undefined;
+        const unitAtHintDay = convertAmount(hint.unitPrice, hint.currency, reportingCurrency, hint.day);
+        const unitPrice = typeof unitAtAsOf === "number" && Number.isFinite(unitAtAsOf) && unitAtAsOf > 0 ? unitAtAsOf : unitAtHintDay;
+        if (typeof unitPrice === "number" && Number.isFinite(unitPrice) && unitPrice > 0) inferredCurrentValue += p.qty * unitPrice;
+        else inferredCurrentValue += p.cost;
       }
     }
 
-    const asOfDay = inferAsOfDay(activities);
-    const { minDay, maxDay } = inferDateRange(activities);
     const netDeposits = buys - sells;
-    const currentValue = (() => {
-      if (typeof currentValueGbp !== "number" || !Number.isFinite(currentValueGbp) || currentValueGbp <= 0) return undefined;
+    let currentValueSource: "stored" | "inferred" | "none" = "none";
+    let currentValue: number | undefined = undefined;
+    if (typeof currentValueGbp === "number" && Number.isFinite(currentValueGbp) && currentValueGbp > 0) {
       const valuationDay = asOfDay || maxDay || "";
-      if (!valuationDay) return undefined;
-      return convertAmount(currentValueGbp, "GBP", reportingCurrency, valuationDay);
-    })();
+      if (valuationDay) {
+        const converted = convertAmount(currentValueGbp, "GBP", reportingCurrency, valuationDay);
+        if (typeof converted === "number" && Number.isFinite(converted) && converted > 0) {
+          currentValue = converted;
+          currentValueSource = "stored";
+        }
+      }
+    }
+    if ((typeof currentValue !== "number" || !Number.isFinite(currentValue) || currentValue <= 0) && inferredCurrentValue > 0) {
+      currentValue = inferredCurrentValue;
+      currentValueSource = "inferred";
+    }
     const fxFeePctOfBuys = buys > 0 ? (totalFxFees / buys) * 100 : undefined;
     const fxFeePctOfSells = sells > 0 ? (totalFxFees / sells) * 100 : undefined;
-    const unrealisedPnl = typeof currentValue === "number" ? currentValue - openCostBasis : undefined;
+    const unrealisedPnl = openCostBasis > 1e-12 ? (typeof currentValue === "number" ? currentValue - openCostBasis : undefined) : 0;
     const totalPnl = typeof unrealisedPnl === "number" ? realizedPnl + unrealisedPnl : undefined;
     const avgHoldDaysForSold = soldHoldShares > 0 ? soldHoldMs / soldHoldShares / (1000 * 60 * 60 * 24) : undefined;
     const soldPct = boughtShares > 0 ? (soldShares / boughtShares) * 100 : undefined;
 
     const mwrr = (() => {
+      const flowSeries = [...flows].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      if (!flowSeries.length) return undefined;
+      if (openCostBasis <= 1e-12) return computeXirr(flowSeries);
       if (typeof currentValue !== "number" || currentValue <= 0 || !asOfDay) return undefined;
-      const calcFlows = [...flows, { date: asOfDay, amount: currentValue }].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-      return computeXirr(calcFlows);
+      return computeXirr([...flowSeries, { date: asOfDay, amount: currentValue }]);
     })();
 
     return {
@@ -344,6 +382,7 @@ export default function InvestingActivityPageView({
       soldPct,
       openPositions,
       openCostBasis,
+      currentValueSource,
       realizedPnl,
       totalFxFees,
       unrealisedPnl,
@@ -358,12 +397,6 @@ export default function InvestingActivityPageView({
 
   const soldPct = clampPct(profiler.soldPct);
   const openPositionPct = profiler.uniqueStocks > 0 ? clampPct((profiler.openPositions / profiler.uniqueStocks) * 100) : 0;
-  const valuationDay = profiler.asOfDay || profiler.maxDay || new Date().toISOString().slice(0, 10);
-  const currentValueDisplay = React.useMemo(() => {
-    if (typeof currentValueGbp !== "number" || !Number.isFinite(currentValueGbp) || currentValueGbp <= 0) return "";
-    const converted = convertAmount(currentValueGbp, "GBP", reportingCurrency, valuationDay);
-    return typeof converted === "number" && Number.isFinite(converted) ? converted.toFixed(2) : "";
-  }, [currentValueGbp, reportingCurrency, valuationDay]);
   const purchaseTimeline = React.useMemo(() => buildPurchaseTimeline(activities, reportingCurrency), [activities, reportingCurrency]);
   const purchasePeak = React.useMemo(
     () => purchaseTimeline.reduce((max, point) => (point.amount > max ? point.amount : max), 0),
@@ -436,29 +469,6 @@ export default function InvestingActivityPageView({
                     <option value="USD">USD</option>
                     <option value="EUR">EUR</option>
                   </select>
-                </div>
-                <div className="flex items-center gap-1 rounded-[0.55rem] border border-[#d1d5db] bg-[#ffffff] px-1 py-1">
-                  <span className="px-1 text-[10px] font-semibold text-[#6b7280]">Value</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className="app-input h-6 w-24 rounded-[0.45rem] border border-[#d1d5db] bg-[#ffffff] px-2 text-[10px] font-semibold text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
-                    value={currentValueDisplay}
-                    placeholder="0.00"
-                    onChange={(e) => {
-                      const raw = Number(e.target.value);
-                      if (!Number.isFinite(raw) || raw <= 0) {
-                        actions.setTrading212CurrentValueGbp(account, undefined);
-                        return;
-                      }
-                      const gbpValue = convertAmount(raw, reportingCurrency, "GBP", valuationDay);
-                      if (typeof gbpValue === "number" && Number.isFinite(gbpValue) && gbpValue > 0) {
-                        actions.setTrading212CurrentValueGbp(account, gbpValue);
-                      }
-                    }}
-                    title={`Current portfolio value in ${reportingCurrency}`}
-                  />
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
@@ -542,11 +552,7 @@ export default function InvestingActivityPageView({
               <MetricCard tooltip={METRIC_TOOLTIPS.totalPnl} className={pnlToneClasses(profiler.unrealisedPnl)}>
                 <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Unrealized Value</div>
                 <div className="text-sm font-semibold tabular-nums">
-                  {typeof profiler.unrealisedPnl === "number"
-                    ? fmtMoney(profiler.unrealisedPnl, reportingCurrency)
-                    : typeof profiler.mwrr === "number"
-                      ? fmtPct(profiler.mwrr * 100)
-                      : "-"}
+                  {typeof profiler.unrealisedPnl === "number" ? fmtMoney(profiler.unrealisedPnl, reportingCurrency) : "-"}
                 </div>
               </MetricCard>
 
@@ -557,7 +563,7 @@ export default function InvestingActivityPageView({
 
               <MetricCard tooltip={METRIC_TOOLTIPS.mwrr}>
                 <div className="text-[10px] uppercase tracking-[0.12em] app-muted">MWRR</div>
-                <div className="text-sm font-semibold tabular-nums">{typeof profiler.mwrr === "number" ? fmtPct(profiler.mwrr * 100) : "Set value"}</div>
+                <div className="text-sm font-semibold tabular-nums">{typeof profiler.mwrr === "number" ? fmtPct(profiler.mwrr * 100) : "-"}</div>
               </MetricCard>
 
               <MetricCard tooltip={METRIC_TOOLTIPS.netDeposits}>
