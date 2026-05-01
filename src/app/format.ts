@@ -21,13 +21,19 @@ export function fmtCompact(value: number): string {
 }
 
 export function parseDatetimeLocal(value: string): Date | null {
-  // Expected format: "YYYY-MM-DD HH:mm:ss"
   const trimmed = value.trim();
   if (!trimmed) return null;
-  const [datePart, timePart] = trimmed.split(" ");
-  if (!datePart || !timePart) return null;
+  if (trimmed.includes("T")) {
+    const isoDate = new Date(trimmed);
+    if (!Number.isNaN(isoDate.getTime())) return isoDate;
+  }
+
+  const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const [, datePart, hmPart, ssPart] = match;
   const [yy, mm, dd] = datePart.split("-").map(Number);
-  const [hh, min, ss] = timePart.split(":").map(Number);
+  const [hh, min] = hmPart.split(":").map(Number);
+  const ss = Number(ssPart ?? "0");
   if (!yy || !mm || !dd) return null;
   const d = new Date(yy, mm - 1, dd, hh || 0, min || 0, ss || 0, 0);
   if (Number.isNaN(d.getTime())) return null;
@@ -50,4 +56,3 @@ export function fmtDurationMs(ms: number): string {
   const remMin = minutes % 60;
   return `${hours}h ${remMin}m`;
 }
-

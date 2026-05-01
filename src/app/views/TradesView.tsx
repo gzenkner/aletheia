@@ -6,6 +6,25 @@ import Textarea from "../ui/Textarea";
 import { fmtDurationMs, fmtMoney, fmtPct, parseDatetimeLocal } from "../format";
 import { cn } from "../ui/cn";
 
+function HoverMetricCard({
+  tooltip,
+  className,
+  children
+}: {
+  tooltip: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("group relative cursor-help", className)}>
+      {children}
+      <div className="pointer-events-none absolute left-0 top-full z-20 mt-1 w-64 rounded-[0.45rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] px-2 py-1 text-[10px] leading-4 text-[color:var(--app-text)] opacity-0 shadow-md transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        {tooltip}
+      </div>
+    </div>
+  );
+}
+
 function pnlTone(pnl: number): string {
   if (pnl > 0) return "text-emerald-700";
   if (pnl < 0) return "text-rose-700";
@@ -26,6 +45,25 @@ function dateOnly(datetime: string): string {
 function datetimeValue(datetime: string): number {
   const ts = new Date(datetime.replace(" ", "T") + "Z").getTime();
   return Number.isFinite(ts) ? ts : 0;
+}
+
+function formatDayLabel(isoDay: string): string {
+  const [year, month, day] = isoDay.split("-").map(Number);
+  if (!year || !month || !day) return isoDay;
+  const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.getTime())) return isoDay;
+  return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function addDays(isoDay: string, delta: number): string {
+  const [year, month, day] = isoDay.split("-").map(Number);
+  if (!year || !month || !day) return isoDay;
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + delta);
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function TradeRow({ trade, active, onSelect }: { trade: Trade; active: boolean; onSelect: () => void }) {
@@ -196,6 +234,32 @@ export default function TradesView({
   onToggleMistake: (mistake: string) => void;
 }) {
   const [sortNewestFirst, setSortNewestFirst] = React.useState(true);
+  const recentDailyPnl = React.useMemo(() => {
+    const latestDay = trades.reduce<string | null>((acc, trade) => {
+      const day = trade.openDatetime.slice(0, 10);
+      if (!day) return acc;
+      return !acc || day > acc ? day : acc;
+    }, null);
+
+    if (!latestDay) return [];
+
+    const pnlByDay = new Map<string, number>();
+    for (const trade of trades) {
+      const day = trade.openDatetime.slice(0, 10);
+      pnlByDay.set(day, (pnlByDay.get(day) ?? 0) + trade.grossPnl);
+    }
+
+    return Array.from({ length: 7 }, (_, index) => {
+      const isoDay = addDays(latestDay, index - 6);
+      const tradeCount = trades.filter((trade) => trade.openDatetime.slice(0, 10) === isoDay).length;
+      return {
+        isoDay,
+        label: formatDayLabel(isoDay),
+        pnl: pnlByDay.get(isoDay) ?? 0,
+        tradeCount
+      };
+    });
+  }, [trades]);
   const sortedTrades = React.useMemo(
     () =>
       [...trades].sort((a, b) => {
@@ -231,90 +295,113 @@ export default function TradesView({
   const hold = open && close ? close.getTime() - open.getTime() : 0;
 
   return (
-    <div className="grid h-full min-h-0 gap-2 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
-      <div className="min-h-0">
-        <Card className="app-panel flex h-full min-h-0 flex-col rounded-[0.7rem] p-1.5">
-          <div className="flex items-center justify-between gap-3 px-1.5 pb-2">
-            <div className="app-kicker">Activity</div>
-            <button
-              type="button"
-              className="app-ghost-outline rounded-[0.5rem] px-2 py-0.5 text-[10px] font-semibold"
-              onClick={() => setSortNewestFirst((prev) => !prev)}
-            >
-              Time: {sortNewestFirst ? "Newest" : "Oldest"}
-            </button>
+    <div className="grid h-full min-h-0 gap-2 overflow-hidden">
+      <Card className="app-card-soft rounded-[0.7rem] p-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="app-kicker">Last 7 days</div>
+            <div className="mt-0.5 text-[11px] app-muted">Daily realized P/L</div>
           </div>
-          <div className="grid min-h-0 flex-1 gap-1.5 overflow-y-auto pr-1">
-            {sortedTrades.map((t) => (
-              <TradeRow key={t.id} trade={t} active={t.id === selected?.id} onSelect={() => onSelectTrade(t.id)} />
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      {selected ? (
-        <div className="min-h-0 grid gap-2 overflow-y-auto pr-1">
-          <Card className="app-card-soft rounded-[0.7rem] p-2">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="app-kicker">Transaction</div>
-                <div className="font-display mt-0.5 text-[15px] font-semibold">{selected.symbol}</div>
-                <div className="mt-0.5 text-[11px] app-muted">
-                  {String(selected.side).toUpperCase()} • {dateOnly(selected.openDatetime)} → {dateOnly(selected.closeDatetime)}
-                  {hold > 0 ? ` • ${fmtDurationMs(hold)}` : ""}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={cn("app-pill rounded-[999px] px-2 py-0.5 text-[11px] font-semibold", pnlPillClass(selected.grossPnl))}>
-                  {fmtMoney(selected.grossPnl)} <span className="ml-1 text-[10px] opacity-75">({fmtPct(selected.grossPnlPct)})</span>
-                </span>
-                <span className="app-pill rounded-[999px] px-2 py-0.5 text-[11px] font-semibold">{selected.volume} sh</span>
-              </div>
-            </div>
-
-            <div className="mt-1.5 grid gap-1 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Entry</div>
-                <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.entryPrice.toFixed(2)}</div>
-              </div>
-              <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Exit</div>
-                <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.exitPrice.toFixed(2)}</div>
-              </div>
-              <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">MFE / MAE</div>
-                <div className="mt-0.5 text-[11px] font-semibold">
-                  <span className="text-emerald-700">{fmtMoney(selected.positionMfe)}</span> <span className="app-muted">/</span>{" "}
-                  <span className="text-rose-700">{fmtMoney(selected.positionMae)}</span>
-                </div>
-              </div>
-              <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
-                <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Execs</div>
-                <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.execCount}</div>
-              </div>
-            </div>
-
-            {selected.notes || selected.tags ? (
-              <div className="mt-1.5 grid gap-1 sm:grid-cols-2">
-                {selected.tags ? (
-                  <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
-                    <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Tags</div>
-                    <div className="mt-0.5 text-[11px] font-semibold">{selected.tags}</div>
-                  </div>
-                ) : null}
-                {selected.notes ? (
-                  <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
-                    <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Notes</div>
-                    <div className="mt-0.5 text-[11px]">{selected.notes}</div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </Card>
-
-          <ReflectionPanel tradeId={selected.id} reflection={reflection} onChange={onChangeReflection} onToggleMistake={onToggleMistake} />
         </div>
-      ) : null}
+        <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-7">
+          {recentDailyPnl.map((day) => (
+            <HoverMetricCard
+              key={day.isoDay}
+              className="rounded-[0.6rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-2"
+              tooltip={`${day.label} (${day.isoDay}). Metric: realized day P/L. Calculation: sum of gross P/L across all day-trading trades whose open date is ${day.isoDay}. Included trades: ${day.tradeCount}. Zero means no net profit or loss for that day.`}
+            >
+              <div className="text-[10px] uppercase tracking-[0.12em] app-muted">{day.label}</div>
+              <div className={cn("mt-1 text-sm font-semibold tabular-nums", pnlTone(day.pnl))}>{fmtMoney(day.pnl)}</div>
+            </HoverMetricCard>
+          ))}
+        </div>
+      </Card>
+
+      <div className="grid h-full min-h-0 gap-2 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
+        <div className="min-h-0">
+          <Card className="app-panel flex h-full min-h-0 flex-col rounded-[0.7rem] p-1.5">
+            <div className="flex items-center justify-between gap-3 px-1.5 pb-2">
+              <div className="app-kicker">Activity</div>
+              <button
+                type="button"
+                className="app-ghost-outline rounded-[0.5rem] px-2 py-0.5 text-[10px] font-semibold"
+                onClick={() => setSortNewestFirst((prev) => !prev)}
+              >
+                Time: {sortNewestFirst ? "Newest" : "Oldest"}
+              </button>
+            </div>
+            <div className="grid min-h-0 flex-1 gap-1.5 overflow-y-auto pr-1">
+              {sortedTrades.map((t) => (
+                <TradeRow key={t.id} trade={t} active={t.id === selected?.id} onSelect={() => onSelectTrade(t.id)} />
+              ))}
+            </div>
+          </Card>
+        </div>
+
+        {selected ? (
+          <div className="min-h-0 grid gap-2 overflow-y-auto pr-1">
+            <Card className="app-card-soft rounded-[0.7rem] p-2">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="app-kicker">Transaction</div>
+                  <div className="font-display mt-0.5 text-[15px] font-semibold">{selected.symbol}</div>
+                  <div className="mt-0.5 text-[11px] app-muted">
+                    {String(selected.side).toUpperCase()} • {dateOnly(selected.openDatetime)} → {dateOnly(selected.closeDatetime)}
+                    {hold > 0 ? ` • ${fmtDurationMs(hold)}` : ""}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={cn("app-pill rounded-[999px] px-2 py-0.5 text-[11px] font-semibold", pnlPillClass(selected.grossPnl))}>
+                    {fmtMoney(selected.grossPnl)} <span className="ml-1 text-[10px] opacity-75">({fmtPct(selected.grossPnlPct)})</span>
+                  </span>
+                  <span className="app-pill rounded-[999px] px-2 py-0.5 text-[11px] font-semibold">{selected.volume} sh</span>
+                </div>
+              </div>
+
+              <div className="mt-1.5 grid gap-1 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                  <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Entry</div>
+                  <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.entryPrice.toFixed(2)}</div>
+                </div>
+                <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                  <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Exit</div>
+                  <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.exitPrice.toFixed(2)}</div>
+                </div>
+                <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                  <div className="text-[10px] uppercase tracking-[0.12em] app-muted">MFE / MAE</div>
+                  <div className="mt-0.5 text-[11px] font-semibold">
+                    <span className="text-emerald-700">{fmtMoney(selected.positionMfe)}</span> <span className="app-muted">/</span>{" "}
+                    <span className="text-rose-700">{fmtMoney(selected.positionMae)}</span>
+                  </div>
+                </div>
+                <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                  <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Execs</div>
+                  <div className="mt-0.5 text-[11px] font-semibold tabular-nums">{selected.execCount}</div>
+                </div>
+              </div>
+
+              {selected.notes || selected.tags ? (
+                <div className="mt-1.5 grid gap-1 sm:grid-cols-2">
+                  {selected.tags ? (
+                    <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                      <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Tags</div>
+                      <div className="mt-0.5 text-[11px] font-semibold">{selected.tags}</div>
+                    </div>
+                  ) : null}
+                  {selected.notes ? (
+                    <div className="rounded-[0.55rem] border border-[color:var(--app-border)] bg-[color:var(--app-card)] p-1.5">
+                      <div className="text-[10px] uppercase tracking-[0.12em] app-muted">Notes</div>
+                      <div className="mt-0.5 text-[11px]">{selected.notes}</div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </Card>
+
+            <ReflectionPanel tradeId={selected.id} reflection={reflection} onChange={onChangeReflection} onToggleMistake={onToggleMistake} />
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

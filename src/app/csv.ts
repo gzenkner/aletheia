@@ -1,24 +1,100 @@
 import type { Trade } from "./types";
 
-export type CsvSchemaId = "trades" | "orders_webull_uk" | "orders_thebroker";
+export type CsvSchemaId = "trades" | "tradervue" | "orders_webull_uk" | "orders_thebroker";
+
+export type CsvSchemaMapping = {
+  source: string;
+  target: string;
+  notes?: string;
+};
+
+export const NORMALIZED_TRADE_COLUMNS = [
+  "Open Datetime",
+  "Close Datetime",
+  "Symbol",
+  "Side",
+  "Volume",
+  "Exec Count",
+  "Entry Price",
+  "Exit Price",
+  "Gross P&L",
+  "Gross P&L (%)",
+  "Shared",
+  "Notes",
+  "Tags",
+  "Gross P&L (t)",
+  "Position MFE",
+  "Position MAE",
+  "Price MFE",
+  "Price MAE",
+  "Position MFE Datetime",
+  "Position MAE Datetime",
+  "Price MFE Datetime",
+  "Price MAE Datetime"
+] as const;
 
 export const CSV_SCHEMAS: Array<{
   id: CsvSchemaId;
   label: string;
   description: string;
   requiredColumns: string[];
+  targetColumns: string[];
+  mappings: CsvSchemaMapping[];
 }> = [
   {
     id: "trades",
-    label: "Trades CSV (TradeLogger)",
-    description: "Already-normalized trades with Open/Close/Entry/Exit/P&L columns.",
-    requiredColumns: ["Open Datetime", "Close Datetime", "Symbol", "Side", "Volume", "Entry Price", "Exit Price", "Gross P&L"]
+    label: "Trades CSV (Open/Close trade export)",
+    description: "Already-normalized trades with headers like Open Datetime, Close Datetime, Symbol, Side, Volume, Entry Price, Exit Price, and Gross P&L.",
+    requiredColumns: ["Open Datetime", "Close Datetime", "Symbol", "Side", "Volume", "Entry Price", "Exit Price", "Gross P&L"],
+    targetColumns: [...NORMALIZED_TRADE_COLUMNS],
+    mappings: [
+      { source: "Open Datetime", target: "Open Datetime" },
+      { source: "Close Datetime", target: "Close Datetime" },
+      { source: "Symbol", target: "Symbol" },
+      { source: "Side", target: "Side" },
+      { source: "Volume", target: "Volume" },
+      { source: "Exec Count", target: "Exec Count", notes: "Optional direct pass-through when present." },
+      { source: "Entry Price", target: "Entry Price" },
+      { source: "Exit Price", target: "Exit Price" },
+      { source: "Gross P&L", target: "Gross P&L" }
+    ]
+  },
+  {
+    id: "tradervue",
+    label: "Tradervue Trades CSV",
+    description: "Tradervue normalized trade export. Loads directly into the day-trading journal as open/close trades.",
+    requiredColumns: ["Open Datetime", "Close Datetime", "Symbol", "Side", "Volume", "Entry Price", "Exit Price", "Gross P&L"],
+    targetColumns: [...NORMALIZED_TRADE_COLUMNS],
+    mappings: [
+      { source: "Open Datetime", target: "Open Datetime" },
+      { source: "Close Datetime", target: "Close Datetime" },
+      { source: "Symbol", target: "Symbol" },
+      { source: "Side", target: "Side" },
+      { source: "Volume", target: "Volume" },
+      { source: "Exec Count", target: "Exec Count" },
+      { source: "Entry Price", target: "Entry Price" },
+      { source: "Exit Price", target: "Exit Price" },
+      { source: "Gross P&L", target: "Gross P&L" },
+      { source: "Gross P&L (%)", target: "Gross P&L (%)" },
+      { source: "Notes", target: "Notes" },
+      { source: "Tags", target: "Tags" }
+    ]
   },
   {
     id: "orders_webull_uk",
     label: "Webull UK Orders CSV",
     description: "Order history / fills. Filled Buy/Sell rows are converted into round-trip trades per symbol.",
-    requiredColumns: ["Symbol", "Side", "Filled Qty", "Avg Fill Price", "Status", "Update Time"]
+    requiredColumns: ["Symbol", "Side", "Filled Qty", "Avg Fill Price", "Status", "Update Time"],
+    targetColumns: [...NORMALIZED_TRADE_COLUMNS],
+    mappings: [
+      { source: "Symbol", target: "Symbol" },
+      { source: "Side", target: "Side", notes: "Buy/Sell fills are paired into one long or short trade direction." },
+      { source: "Filled Qty", target: "Volume", notes: "Entry and exit fills are matched and normalized into trade size." },
+      { source: "Avg Fill Price", target: "Entry Price / Exit Price", notes: "Buy and sell fill prices become trade entry and exit." },
+      { source: "Update Time", target: "Open Datetime / Close Datetime", notes: "Timestamps are normalized to ISO 8601 and paired into round trips." },
+      { source: "Fee", target: "Gross P&L", notes: "Fees are subtracted when normalized P/L is calculated." },
+      { source: "Order ID", target: "Notes", notes: "Order ids are retained as part of the imported order context." }
+    ]
   },
   {
     id: "orders_thebroker",
@@ -38,9 +114,33 @@ export const CSV_SCHEMAS: Array<{
       "currency",
       "Fee",
       "Order ID"
+    ],
+    targetColumns: [...NORMALIZED_TRADE_COLUMNS],
+    mappings: [
+      { source: "Symbol", target: "Symbol" },
+      { source: "Side", target: "Side", notes: "Buy/Sell fills are paired into one long or short trade direction." },
+      { source: "Filled Qty", target: "Volume", notes: "Entry and exit fills are matched and normalized into trade size." },
+      { source: "Avg Fill Price", target: "Entry Price / Exit Price", notes: "Buy and sell fill prices become trade entry and exit." },
+      { source: "Update Time", target: "Open Datetime / Close Datetime", notes: "Timestamps are normalized and paired into round trips." },
+      { source: "Fee", target: "Gross P&L", notes: "Fees are subtracted when normalized P/L is calculated." },
+      { source: "Order ID", target: "Notes", notes: "Order ids are retained as part of the imported order context." }
     ]
   }
 ];
+
+function matchesRequiredColumns(header: string[], requiredColumns: string[]): boolean {
+  return requiredColumns.every((name) => header.includes(name));
+}
+
+function detectSchemaFromHeader(header: string[]): CsvSchemaId {
+  const theBrokerSchema = CSV_SCHEMAS.find((schema) => schema.id === "orders_thebroker");
+  if (theBrokerSchema && matchesRequiredColumns(header, theBrokerSchema.requiredColumns)) return "orders_thebroker";
+
+  const webullSchema = CSV_SCHEMAS.find((schema) => schema.id === "orders_webull_uk");
+  if (webullSchema && matchesRequiredColumns(header, webullSchema.requiredColumns)) return "orders_webull_uk";
+
+  return "trades";
+}
 
 function safeIdFromTrade(t: Omit<Trade, "id">): string {
   const key = [
@@ -160,8 +260,59 @@ function str(value: string): string {
 }
 
 function looksLikeDateTime(value: string): boolean {
-  // Accepts: "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS"
-  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(value.trim());
+  // Accepts:
+  // - "YYYY-MM-DD HH:MM"
+  // - "YYYY-MM-DD HH:MM:SS"
+  // - "YYYY-MM-DDTHH:MM:SS"
+  // - "YYYY-MM-DDTHH:MM:SSZ"
+  // - "YYYY-MM-DDTHH:MM:SS+01:00"
+  return /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?$/.test(value.trim());
+}
+
+function lastSundayOfMonth(year: number, monthIndex: number): number {
+  const d = new Date(year, monthIndex + 1, 0);
+  return d.getDate() - d.getDay();
+}
+
+function londonOffsetForLocalDateTime(year: number, month: number, day: number, hour: number): "+00:00" | "+01:00" {
+  if (month < 3 || month > 10) return "+00:00";
+  if (month > 3 && month < 10) return "+01:00";
+
+  if (month === 3) {
+    const dstStartDay = lastSundayOfMonth(year, 2);
+    if (day > dstStartDay) return "+01:00";
+    if (day < dstStartDay) return "+00:00";
+    return hour >= 2 ? "+01:00" : "+00:00";
+  }
+
+  const dstEndDay = lastSundayOfMonth(year, 9);
+  if (day < dstEndDay) return "+01:00";
+  if (day > dstEndDay) return "+00:00";
+  return hour >= 2 ? "+00:00" : "+01:00";
+}
+
+function normalizeLondonImportDateTime(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+
+  const withZoneMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)(Z|[+-]\d{2}:\d{2})$/);
+  if (withZoneMatch) {
+    const [, datePart, timePart, zonePart] = withZoneMatch;
+    const normalizedTime = timePart.length === 5 ? `${timePart}:00` : timePart;
+    return `${datePart}T${normalizedTime}${zonePart}`;
+  }
+
+  const plainMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!plainMatch) return trimmed;
+
+  const [, yy, mm, dd, hh, min, ss] = plainMatch;
+  const year = Number(yy);
+  const month = Number(mm);
+  const day = Number(dd);
+  const hour = Number(hh);
+  const offset = londonOffsetForLocalDateTime(year, month, day, hour);
+  const seconds = ss ?? "00";
+  return `${yy}-${mm}-${dd}T${hh}:${min}:${seconds}${offset}`;
 }
 
 export function parseTradesCsv(
@@ -169,12 +320,13 @@ export function parseTradesCsv(
   opts?: { strict?: boolean; schema?: CsvSchemaId }
 ): { trades: Trade[]; warnings: string[] } {
   const strict = opts?.strict ?? true;
-  const schema = opts?.schema ?? "trades";
+  const requestedSchema = opts?.schema ?? "trades";
   const warnings: string[] = [];
   const rows = parseCsvRows(text);
   if (!rows.length) return { trades: [], warnings: ["CSV is empty."] };
 
   const header = rows[0].map((h) => h.trim());
+  const schema = requestedSchema === "trades" ? detectSchemaFromHeader(header) : requestedSchema;
   const idx = (name: string) => header.findIndex((h) => h === name);
 
   if (schema === "orders_webull_uk") {
@@ -183,7 +335,7 @@ export function parseTradesCsv(
   if (schema === "orders_thebroker") {
     return parseOrdersCsvToTrades(rows, header, strict);
   }
-  if (schema === "trades") {
+  if (schema === "trades" || schema === "tradervue") {
     // continue into trades parser below
   } else {
     if (strict) throw new Error(`CSV schema error: unknown schema "${schema}"`);
@@ -221,10 +373,10 @@ export function parseTradesCsv(
     }
 
     if (strict && !looksLikeDateTime(openDatetime)) {
-      throw new Error(`Row ${r + 1}: Open Datetime must look like "YYYY-MM-DD HH:MM[:SS]": "${openDatetime}"`);
+      throw new Error(`Row ${r + 1}: Open Datetime must look like "YYYY-MM-DD HH:MM[:SS]" or ISO 8601: "${openDatetime}"`);
     }
     if (strict && closeDatetime && !looksLikeDateTime(closeDatetime)) {
-      throw new Error(`Row ${r + 1}: Close Datetime must look like "YYYY-MM-DD HH:MM[:SS]": "${closeDatetime}"`);
+      throw new Error(`Row ${r + 1}: Close Datetime must look like "YYYY-MM-DD HH:MM[:SS]" or ISO 8601: "${closeDatetime}"`);
     }
 
     const readNum = (col: string): number => {
@@ -312,7 +464,7 @@ function parseOrdersCsvToTrades(rows: string[][], header: string[], strict: bool
       throw new Error(`Row ${r + 1}: missing Symbol, Side, or Update Time`);
     }
     if (strict && time && !looksLikeDateTime(time)) {
-      throw new Error(`Row ${r + 1}: Update Time must look like "YYYY-MM-DD HH:MM[:SS]": "${time}"`);
+      throw new Error(`Row ${r + 1}: Update Time must look like "YYYY-MM-DD HH:MM[:SS]" or ISO 8601: "${time}"`);
     }
 
     const side = sideRaw === "Buy" || sideRaw === "Sell" ? (sideRaw as "Buy" | "Sell") : null;
@@ -331,7 +483,7 @@ function parseOrdersCsvToTrades(rows: string[][], header: string[], strict: bool
     }
     if (qty <= 0 || price <= 0) continue;
 
-    fills.push({ symbol, side, qty, price, fee, time, orderId });
+    fills.push({ symbol, side, qty, price, fee, time: normalizeLondonImportDateTime(time), orderId });
   }
 
   fills.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));

@@ -9,27 +9,6 @@ type DayCell = {
   trades: number;
 };
 
-type TsRange = "5y" | "3y" | "1y" | "ytd" | "1m" | "1w";
-
-const TS_RANGE_OPTIONS: TsRange[] = ["5y", "3y", "1y", "ytd", "1m", "1w"];
-
-const TS_RANGE_LABEL: Record<TsRange, string> = {
-  "5y": "5Y",
-  "3y": "3Y",
-  "1y": "1Y",
-  ytd: "YTD",
-  "1m": "1M",
-  "1w": "1W"
-};
-
-function formatTsTick(iso: string, range: TsRange): string {
-  const [yy, mm, dd] = iso.split("-").map(Number);
-  const date = new Date(yy, (mm || 1) - 1, dd || 1);
-  if (range === "1w" || range === "1m") return iso.slice(5);
-  if (range === "ytd") return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return date.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
-}
-
 function toIsoMonth(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -58,34 +37,6 @@ function isoDayFromParts(year: number, monthIndex: number, day: number): string 
   return `${y}-${m}-${d}`;
 }
 
-function isoDay(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function addDays(iso: string, delta: number): string {
-  const [yy, mm, dd] = iso.split("-").map(Number);
-  const d = new Date(yy, (mm || 1) - 1, dd || 1);
-  d.setDate(d.getDate() + delta);
-  return isoDay(d);
-}
-
-function addMonths(iso: string, delta: number): string {
-  const [yy, mm, dd] = iso.split("-").map(Number);
-  const d = new Date(yy, (mm || 1) - 1, dd || 1);
-  d.setMonth(d.getMonth() + delta);
-  return isoDay(d);
-}
-
-function addYears(iso: string, delta: number): string {
-  const [yy, mm, dd] = iso.split("-").map(Number);
-  const d = new Date(yy, (mm || 1) - 1, dd || 1);
-  d.setFullYear(d.getFullYear() + delta);
-  return isoDay(d);
-}
-
 function pnlClass(pnl: number): string {
   if (pnl > 0) return "text-emerald-700";
   if (pnl < 0) return "text-rose-700";
@@ -108,7 +59,6 @@ function inferDefaultMonth(trades: Trade[]): string {
 
 export default function ReportsView({ trades }: { trades: Trade[] }) {
   const [isoMonth, setIsoMonth] = React.useState(() => inferDefaultMonth(trades));
-  const [tsRange, setTsRange] = React.useState<TsRange>("1m");
   const todayIso = React.useMemo(() => {
     const now = new Date();
     const y = now.getFullYear();
@@ -165,72 +115,6 @@ export default function ReportsView({ trades }: { trades: Trade[] }) {
     }
     return { pnl, count };
   }, [daily]);
-
-  const tsWindow = React.useMemo(() => {
-    const end = todayIso;
-    const start =
-      tsRange === "1w"
-        ? addDays(end, -6)
-        : tsRange === "1m"
-          ? addMonths(end, -1)
-          : tsRange === "1y"
-            ? addYears(end, -1)
-            : tsRange === "3y"
-              ? addYears(end, -3)
-              : tsRange === "5y"
-                ? addYears(end, -5)
-                : `${end.slice(0, 4)}-01-01`;
-    return { start, end };
-  }, [todayIso, tsRange]);
-
-  const tsSeries = React.useMemo(() => {
-    const map = new Map<string, { volume: number; pnl: number }>();
-    for (const t of trades) {
-      const day = t.openDatetime.slice(0, 10);
-      if (day < tsWindow.start || day > tsWindow.end) continue;
-      const cur = map.get(day) ?? { volume: 0, pnl: 0 };
-      cur.volume += Math.abs(t.volume);
-      cur.pnl += t.grossPnl;
-      map.set(day, cur);
-    }
-
-    const days: string[] = [];
-    for (let d = tsWindow.start; d <= tsWindow.end; d = addDays(d, 1)) {
-      days.push(d);
-    }
-
-    return days.map((day) => {
-      const cur = map.get(day) ?? { volume: 0, pnl: 0 };
-      return { day, volume: cur.volume, pnl: cur.pnl };
-    });
-  }, [trades, tsWindow.end, tsWindow.start]);
-
-  const tsChart = React.useMemo(() => {
-    const width = 980;
-    const height = 260;
-    const pad = { l: 48, r: 12, t: 12, b: 28 };
-    const innerW = width - pad.l - pad.r;
-    const innerH = height - pad.t - pad.b;
-    const n = Math.max(1, tsSeries.length);
-    const maxVolume = Math.max(1, ...tsSeries.map((d) => d.volume));
-    const minPnl = Math.min(0, ...tsSeries.map((d) => d.pnl));
-    const maxPnl = Math.max(0, ...tsSeries.map((d) => d.pnl));
-    const pnlSpan = Math.max(1e-6, maxPnl - minPnl);
-    const xFor = (i: number) => pad.l + (i / Math.max(1, n - 1)) * innerW;
-    const yVol = (v: number) => pad.t + innerH - (v / maxVolume) * innerH;
-    const yPnl = (v: number) => pad.t + innerH - ((v - minPnl) / pnlSpan) * innerH;
-    const zeroY = yPnl(0);
-    const barW = Math.max(1, (innerW / n) * 0.7);
-
-    const pnlPath =
-      tsSeries.length > 0
-        ? tsSeries.map((d, i) => `${i === 0 ? "M" : "L"} ${xFor(i)} ${yPnl(d.pnl)}`).join(" ")
-        : "";
-
-    const tickEvery = Math.max(1, Math.floor(tsSeries.length / 7));
-
-    return { width, height, pad, zeroY, barW, xFor, yVol, yPnl, pnlPath, tickEvery };
-  }, [tsSeries]);
 
   return (
     <div className="grid gap-4">
@@ -311,88 +195,6 @@ export default function ReportsView({ trades }: { trades: Trade[] }) {
         </table>
       </div>
 
-      <div className="app-card grid gap-3 rounded-[1rem] p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-base font-semibold">Daily volume &amp; P/L time series</div>
-          <div className="flex flex-wrap gap-2">
-            {TS_RANGE_OPTIONS.map((range) => (
-              <button
-                key={range}
-                type="button"
-                className={cnText(
-                  "rounded-[0.6rem] px-3 py-1.5 text-xs font-semibold",
-                  range === tsRange ? "app-nav-active border" : "app-ghost-outline"
-                )}
-                onClick={() => setTsRange(range)}
-              >
-                {TS_RANGE_LABEL[range]}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="text-xs app-muted">
-          Bars = volume • line = P/L • window: {tsWindow.start} → {tsWindow.end}
-        </div>
-
-        <div className="overflow-x-auto">
-          <svg
-            role="img"
-            aria-label="Daily volume and profit/loss time series"
-            className="block w-full min-w-[820px]"
-            viewBox={`0 0 ${tsChart.width} ${tsChart.height}`}
-            height={tsChart.height}
-            preserveAspectRatio="xMidYMid meet"
-          >
-            <line x1={tsChart.pad.l} x2={tsChart.width - tsChart.pad.r} y1={tsChart.zeroY} y2={tsChart.zeroY} stroke="var(--app-border)" />
-            {tsSeries.map((d, i) => {
-              const x = tsChart.xFor(i) - tsChart.barW / 2;
-              const y = tsChart.yVol(d.volume);
-              const h = tsChart.pad.t + (tsChart.height - tsChart.pad.t - tsChart.pad.b) - y;
-              return (
-                <g key={`${d.day}-vol`}>
-                  <rect
-                    x={x}
-                    y={y}
-                    width={tsChart.barW}
-                    height={Math.max(1, h)}
-                    fill="var(--outcome-accent)"
-                    opacity={0.7}
-                  />
-                  <title>{`${d.day}\nVolume: ${d.volume.toFixed(0)}\nP/L: ${fmtMoney(d.pnl)}`}</title>
-                </g>
-              );
-            })}
-            {tsChart.pnlPath ? (
-              <path d={tsChart.pnlPath} fill="none" stroke="var(--outcome-accent-strong)" strokeWidth={2.5} strokeLinecap="round" />
-            ) : null}
-            {tsSeries.map((d, i) => (
-              <circle key={`${d.day}-point`} cx={tsChart.xFor(i)} cy={tsChart.yPnl(d.pnl)} r={3.2} fill="var(--outcome-accent-strong)">
-                <title>{`${d.day}\nVolume: ${d.volume.toFixed(0)}\nP/L: ${fmtMoney(d.pnl)}`}</title>
-              </circle>
-            ))}
-            {tsSeries.map((d, i) => (
-              <rect
-                key={`${d.day}-hover`}
-                x={tsChart.xFor(i) - Math.max(8, tsChart.barW * 0.55)}
-                y={tsChart.pad.t}
-                width={Math.max(16, tsChart.barW * 1.1)}
-                height={tsChart.height - tsChart.pad.t - tsChart.pad.b}
-                fill="transparent"
-              >
-                <title>{`${d.day}\nVolume: ${d.volume.toFixed(0)}\nP/L: ${fmtMoney(d.pnl)}`}</title>
-              </rect>
-            ))}
-            {tsSeries.map((d, i) => {
-              if (i % tsChart.tickEvery !== 0 && i !== tsSeries.length - 1) return null;
-              return (
-                <text key={`${d.day}-tick`} x={tsChart.xFor(i)} y={tsChart.height - 8} textAnchor="middle" fontSize="10" fill="var(--app-muted)">
-                  {formatTsTick(d.day, tsRange)}
-                </text>
-              );
-            })}
-          </svg>
-        </div>
-      </div>
     </div>
   );
 }

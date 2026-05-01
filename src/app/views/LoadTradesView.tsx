@@ -1,6 +1,6 @@
 import React from "react";
 import { actions } from "../store";
-import { CSV_SCHEMAS, type CsvSchemaId } from "../csv";
+import { CSV_SCHEMAS, NORMALIZED_TRADE_COLUMNS, type CsvSchemaId } from "../csv";
 import type { ImportSummary } from "../types";
 
 type Props = {
@@ -18,7 +18,10 @@ function schemaHeaderExample(schemaId: CsvSchemaId): string {
 
 function sampleFileForSchema(schemaId: CsvSchemaId): { label: string; path: string } | null {
   if (schemaId === "trades") {
-    return { label: "Sample TradeLogger trades CSV", path: "trades.csv" };
+    return { label: "Sample normalized trades CSV", path: "trades.csv" };
+  }
+  if (schemaId === "tradervue") {
+    return { label: "Sample Tradervue trades CSV", path: "trades.csv" };
   }
   if (schemaId === "orders_webull_uk") {
     return { label: "Sample Webull UK orders CSV", path: "webull_uk_orders.csv" };
@@ -26,7 +29,7 @@ function sampleFileForSchema(schemaId: CsvSchemaId): { label: string; path: stri
   return null;
 }
 
-export default function LoadTradesView({ title = "Import trades", onSuccess, defaultSchemaId = "orders_webull_uk" }: Props) {
+export default function LoadTradesView({ title = "Import trades", onSuccess, defaultSchemaId = "trades" }: Props) {
   const [schemaId, setSchemaId] = React.useState<CsvSchemaId>(defaultSchemaId);
   const [paste, setPaste] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -37,6 +40,7 @@ export default function LoadTradesView({ title = "Import trades", onSuccess, def
   const schema = CSV_SCHEMAS.find((s) => s.id === schemaId) ?? CSV_SCHEMAS[0]!;
   const sample = sampleFileForSchema(schemaId);
   const selectedSchemaColumns = schema.requiredColumns.join(", ");
+  const targetColumns = schema.targetColumns.length ? schema.targetColumns : [...NORMALIZED_TRADE_COLUMNS];
 
   async function importTexts(items: Array<{ text: string; source: string }>) {
     setBusy(true);
@@ -85,7 +89,7 @@ export default function LoadTradesView({ title = "Import trades", onSuccess, def
       <h2 className="text-2xl font-semibold">{title}</h2>
 
       <label className="grid gap-1">
-        <div className="text-sm font-semibold">Schema</div>
+        <div className="text-sm font-semibold">Import provider</div>
         <select
           className="app-input h-11 rounded-[0.6rem] px-3 text-base focus:outline-none"
           value={schemaId}
@@ -103,22 +107,58 @@ export default function LoadTradesView({ title = "Import trades", onSuccess, def
       <div className="rounded-[0.85rem] border border-[color:var(--outcome-border)] bg-[color:var(--outcome-soft)] p-3">
         <div className="text-sm font-semibold">{schema.label}</div>
         <div className="mt-1 text-xs opacity-80">{schema.description}</div>
-        <div className="mt-2 text-xs font-semibold">Required: {schema.requiredColumns.join(", ")}</div>
+        <div className="mt-2 text-xs font-semibold">Source columns required: {schema.requiredColumns.join(", ")}</div>
         {schema.requiredColumns.length ? (
           <div className="mt-1 text-xs break-words opacity-80">Header example: {schemaHeaderExample(schemaId)}</div>
         ) : null}
       </div>
+
+      <div className="rounded-[0.75rem] border border-[color:var(--app-border)] p-3">
+        <div className="text-sm font-semibold">Target columns in Aletheia</div>
+        <div className="mt-1 text-xs opacity-80">
+          Every provider is normalized into the same day-trading trade shape before loading.
+        </div>
+        <div className="mt-2 break-words text-xs opacity-80">{targetColumns.join(", ")}</div>
+      </div>
+
+      <div className="rounded-[0.75rem] border border-[color:var(--app-border)] p-3">
+        <div className="text-sm font-semibold">Source → target mapping</div>
+        <div className="mt-1 text-xs opacity-80">
+          These are the columns or computed values the selected provider maps into Aletheia.
+        </div>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[540px] table-fixed border-separate border-spacing-0 text-xs">
+            <thead>
+              <tr>
+                <th className="border-b border-[color:var(--app-border)] px-2 py-2 text-left font-semibold">Source field</th>
+                <th className="border-b border-[color:var(--app-border)] px-2 py-2 text-left font-semibold">Target field</th>
+                <th className="border-b border-[color:var(--app-border)] px-2 py-2 text-left font-semibold">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {schema.mappings.map((mapping) => (
+                <tr key={`${mapping.source}-${mapping.target}`}>
+                  <td className="border-b border-[color:var(--app-border)] px-2 py-2 align-top font-mono">{mapping.source}</td>
+                  <td className="border-b border-[color:var(--app-border)] px-2 py-2 align-top font-mono">{mapping.target}</td>
+                  <td className="border-b border-[color:var(--app-border)] px-2 py-2 align-top opacity-80">{mapping.notes ?? "Direct mapping"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <details className="rounded-[0.75rem] border border-[color:var(--app-border)] p-3">
-        <summary className="cursor-pointer text-sm font-semibold">Schema overview</summary>
+        <summary className="cursor-pointer text-sm font-semibold">Provider overview</summary>
         <div className="mt-2 grid gap-2 text-xs">
           {CSV_SCHEMAS.map((s) => (
             <div key={s.id} className="rounded-[0.6rem] border border-[color:var(--app-border)] p-2">
               <div className="font-semibold">{s.label}</div>
               <div className="mt-1 opacity-80">{s.description}</div>
-              <div className="mt-1 break-words opacity-70">Columns: {s.requiredColumns.join(", ")}</div>
+              <div className="mt-1 break-words opacity-70">Source columns: {s.requiredColumns.join(", ")}</div>
             </div>
           ))}
-          <div className="opacity-70">Current schema columns: {selectedSchemaColumns}</div>
+          <div className="opacity-70">Current provider columns: {selectedSchemaColumns}</div>
         </div>
       </details>
 
@@ -156,7 +196,7 @@ export default function LoadTradesView({ title = "Import trades", onSuccess, def
           className="app-input min-h-36 rounded-[0.6rem] px-3 py-2 text-base focus:outline-none"
           value={paste}
           onChange={(e) => setPaste(e.target.value)}
-          placeholder="Paste the full CSV including the header row…"
+          placeholder="Paste the full CSV including the header row, for example: Open Datetime, Close Datetime, Symbol, Side, Volume…"
         />
         <div className="flex items-center gap-2">
           <button
